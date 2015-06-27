@@ -23,8 +23,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <srs_app_conn.hpp>
 
-#include <arpa/inet.h>
-
 #include <srs_kernel_log.hpp>
 #include <srs_kernel_error.hpp>
 #include <srs_app_server.hpp>
@@ -34,11 +32,11 @@ SrsConnection::SrsConnection(SrsServer* srs_server, st_netfd_t client_stfd)
 {
     server = srs_server;
     stfd = client_stfd;
-    connection_id = 0;
+    
     // the client thread should reap itself, 
     // so we never use joinable.
     // TODO: FIXME: maybe other thread need to stop it.
-    // @see: https://github.com/winlinvip/simple-rtmp-server/issues/78
+    // @see: https://github.com/simple-rtmp-server/srs/issues/78
     pthread = new SrsThread(this, 0, false);
 }
 
@@ -57,7 +55,6 @@ int SrsConnection::cycle()
     int ret = ERROR_SUCCESS;
     
     _srs_context->generate_id();
-    connection_id = _srs_context->get_id();
     ip = srs_get_peer_ip(st_netfd_fileno(stfd));
     
     ret = do_cycle();
@@ -69,7 +66,7 @@ int SrsConnection::cycle()
     
     // success.
     if (ret == ERROR_SUCCESS) {
-        srs_trace("client process normally finished. ret=%d", ret);
+        srs_trace("client finished.");
     }
     
     // client close peer.
@@ -94,4 +91,5 @@ void SrsConnection::stop()
     srs_close_stfd(stfd);
     srs_freep(pthread);
 }
+
 

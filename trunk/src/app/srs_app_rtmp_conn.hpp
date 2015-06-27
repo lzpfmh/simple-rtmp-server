@@ -41,38 +41,46 @@ class SrsSource;
 class SrsRefer;
 class SrsConsumer;
 class SrsMessage;
-class SrsSocket;
+class SrsStSocket;
 #ifdef SRS_AUTO_HTTP_CALLBACK    
 class SrsHttpHooks;
 #endif
 class SrsBandwidth;
 class SrsKbps;
+class SrsRtmpClient;
+class SrsSharedPtrMessage;
 
 /**
 * the client provides the main logic control for RTMP clients.
 */
-class SrsRtmpConn : public SrsConnection, public ISrsReloadHandler
+class SrsRtmpConn : public virtual SrsConnection, public virtual ISrsReloadHandler
 {
 private:
     SrsRequest* req;
     SrsResponse* res;
-    SrsSocket* skt;
+    SrsStSocket* skt;
     SrsRtmpServer* rtmp;
     SrsRefer* refer;
     SrsBandwidth* bandwidth;
     // elapse duration in ms
     // for live play duration, for instance, rtmpdump to record.
-    // @see https://github.com/winlinvip/simple-rtmp-server/issues/47
+    // @see https://github.com/simple-rtmp-server/srs/issues/47
     int64_t duration;
     SrsKbps* kbps;
 public:
     SrsRtmpConn(SrsServer* srs_server, st_netfd_t client_stfd);
     virtual ~SrsRtmpConn();
+public:
+    virtual void kbps_resample();
 protected:
     virtual int do_cycle();
 // interface ISrsReloadHandler
 public:
     virtual int on_reload_vhost_removed(std::string vhost);
+// interface IKbpsDelta
+public:
+    virtual int64_t get_send_bytes_delta();
+    virtual int64_t get_recv_bytes_delta();
 private:
     // when valid and connected to vhost/app, service the client.
     virtual int service_cycle();
@@ -80,10 +88,16 @@ private:
     virtual int stream_service_cycle();
     virtual int check_vhost();
     virtual int playing(SrsSource* source);
-    virtual int fmle_publish(SrsSource* source);
-    virtual int flash_publish(SrsSource* source);
+    virtual int fmle_publishing(SrsSource* source);
+    virtual int do_fmle_publishing(SrsSource* source);
+    virtual int flash_publishing(SrsSource* source);
+    virtual int do_flash_publishing(SrsSource* source);
     virtual int process_publish_message(SrsSource* source, SrsMessage* msg, bool vhost_is_edge);
     virtual int process_play_control_msg(SrsConsumer* consumer, SrsMessage* msg);
+private:
+    virtual int check_edge_token_traverse_auth();
+    virtual int connect_server(int origin_index, st_netfd_t* pstsock);
+    virtual int do_token_traverse_auth(SrsRtmpClient* client);
 private:
     virtual int http_hooks_on_connect();
     virtual void http_hooks_on_close();
@@ -94,3 +108,4 @@ private:
 };
 
 #endif
+

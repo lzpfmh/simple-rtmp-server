@@ -28,8 +28,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 using namespace std;
 
 #include <srs_kernel_log.hpp>
-#include <srs_protocol_rtmp_stack.hpp>
-#include <srs_core_autofree.hpp>
+#include <srs_protocol_stack.hpp>
 #include <srs_protocol_amf0.hpp>
 #include <srs_kernel_codec.hpp>
 #include <srs_app_hls.hpp>
@@ -41,9 +40,25 @@ using namespace std;
 #include <srs_kernel_stream.hpp>
 #include <srs_app_edge.hpp>
 #include <srs_kernel_utility.hpp>
+#include <srs_app_avc_aac.hpp>
 
 #define CONST_MAX_JITTER_MS         500
 #define DEFAULT_FRAME_TIME_MS         40
+
+// for 26ms per audio packet,
+// 115 packets is 3s.
+#define __SRS_PURE_AUDIO_GUESS_COUNT 115
+
+int _srs_time_jitter_string2int(std::string time_jitter)
+{
+    if (time_jitter == "full") {
+        return SrsRtmpJitterAlgorithmFULL;
+    } else if (time_jitter == "zero") {
+        return SrsRtmpJitterAlgorithmZERO;
+    } else {
+        return SrsRtmpJitterAlgorithmOFF;
+    }
+}
 
 SrsRtmpJitter::SrsRtmpJitter()
 {
@@ -54,12 +69,36 @@ SrsRtmpJitter::~SrsRtmpJitter()
 {
 }
 
-int SrsRtmpJitter::correct(SrsSharedPtrMessage* msg, int tba, int tbv)
+int SrsRtmpJitter::correct(SrsSharedPtrMessage* msg, int tba, int tbv, SrsRtmpJitterAlgorithm ag)
 {
     int ret = ERROR_SUCCESS;
-
+    
+    // for performance issue
+    if (ag != SrsRtmpJitterAlgorithmFULL) {
+        // all jitter correct features is disabled, ignore.
+        if (ag == SrsRtmpJitterAlgorithmOFF) {
+            return ret;
+        }
+    
+        // start at zero, but donot ensure monotonically increasing.
+        if (ag == SrsRtmpJitterAlgorithmZERO) {
+            // for the first time, last_pkt_correct_time is zero.
+            // while when timestamp overflow, the timestamp become smaller, reset the last_pkt_correct_time.
+            if (last_pkt_correct_time <= 0 || last_pkt_correct_time > msg->header.timestamp) {
+                last_pkt_correct_time = msg->header.timestamp;
+            }
+            msg->header.timestamp -= last_pkt_correct_time;
+            return ret;
+        }
+        
+        // other algorithm, ignore.
+        return ret;
+    }
+    
+    // full jitter algorithm, do jitter correct.
+    
     // set to 0 for metadata.
-    if (!msg->header.is_video() && !msg->header.is_audio()) {
+    if (!msg->header.is_audio() && !msg->header.is_video()) {
         msg->header.timestamp = 0;
         return ret;
     }
@@ -136,7 +175,7 @@ int SrsMessageQueue::enqueue(SrsSharedPtrMessage* msg)
 {
     int ret = ERROR_SUCCESS;
     
-    if (msg->header.is_video() || msg->header.is_audio()) {
+    if (msg->header.is_audio() || msg->header.is_video()) {
         if (av_start_time == -1) {
             av_start_time = msg->header.timestamp;
         }
@@ -153,7 +192,7 @@ int SrsMessageQueue::enqueue(SrsSharedPtrMessage* msg)
     return ret;
 }
 
-int SrsMessageQueue::get_packets(int max_count, SrsSharedPtrMessage**& pmsgs, int& count)
+int SrsMessageQueue::dump_packets(int max_count, SrsSharedPtrMessage** pmsgs, int& count)
 {
     int ret = ERROR_SUCCESS;
     
@@ -161,17 +200,8 @@ int SrsMessageQueue::get_packets(int max_count, SrsSharedPtrMessage**& pmsgs, in
         return ret;
     }
     
-    if (max_count == 0) {
-        count = (int)msgs.size();
-    } else {
-        count = srs_min(max_count, (int)msgs.size());
-    }
-
-    if (count <= 0) {
-        return ret;
-    }
-    
-    pmsgs = new SrsSharedPtrMessage*[count];
+    srs_assert(max_count > 0);
+    count = srs_min(max_count, (int)msgs.size());
     
     for (int i = 0; i < count; i++) {
         pmsgs[i] = msgs[i];
@@ -181,8 +211,13 @@ int SrsMessageQueue::get_packets(int max_count, SrsSharedPtrMessage**& pmsgs, in
     av_start_time = last->header.timestamp;
     
     if (count == (int)msgs.size()) {
+        // the pmsgs is big enough and clear msgs at most time.
         msgs.clear();
     } else {
+        // erase some vector elements may cause memory copy,
+        // maybe can use more efficient vector.swap to avoid copy.
+        // @remark for the pmsgs is big enough, for instance, SYS_MAX_PLAY_SEND_MSGS 128,
+        //      the rtmp play client will get 128msgs once, so this branch rarely execute.
         msgs.erase(msgs.begin(), msgs.begin() + count);
     }
     
@@ -213,7 +248,11 @@ void SrsMessageQueue::shrink()
         }
     }
     
-    // no iframe, clear the queue.
+    // no iframe, for audio, clear the queue.
+    // it is ok to clear for audio, for the shrink tell us the queue is full.
+    // for video, we clear util the I-Frame, for the decoding must start from I-frame,
+    // for audio, it's ok to clear any data, also we can clear the whole queue.
+    // @see: https://github.com/simple-rtmp-server/srs/issues/134
     if (iframe_index < 0) {
         clear();
         return;
@@ -275,12 +314,12 @@ int SrsConsumer::get_time()
     return jitter->get_time();
 }
 
-int SrsConsumer::enqueue(SrsSharedPtrMessage* msg, int tba, int tbv)
+int SrsConsumer::enqueue(SrsSharedPtrMessage* msg, bool atc, int tba, int tbv, SrsRtmpJitterAlgorithm ag)
 {
     int ret = ERROR_SUCCESS;
     
-    if (!source->is_atc()) {
-        if ((ret = jitter->correct(msg, tba, tbv)) != ERROR_SUCCESS) {
+    if (!atc) {
+        if ((ret = jitter->correct(msg, tba, tbv, ag)) != ERROR_SUCCESS) {
             srs_freep(msg);
             return ret;
         }
@@ -293,10 +332,12 @@ int SrsConsumer::enqueue(SrsSharedPtrMessage* msg, int tba, int tbv)
     return ret;
 }
 
-int SrsConsumer::get_packets(int max_count, SrsSharedPtrMessage**& pmsgs, int& count)
+int SrsConsumer::dump_packets(int max_count, SrsSharedPtrMessage** pmsgs, int& count)
 {
+    srs_assert(max_count > 0);
+    
     if (should_update_source_id) {
-        srs_trace("update source_id=%d", source->source_id());
+        srs_trace("update source_id=%d[%d]", source->source_id(), source->source_id());
         should_update_source_id = false;
     }
     
@@ -305,7 +346,7 @@ int SrsConsumer::get_packets(int max_count, SrsSharedPtrMessage**& pmsgs, int& c
         return ERROR_SUCCESS;
     }
     
-    return queue->get_packets(max_count, pmsgs, count);
+    return queue->dump_packets(max_count, pmsgs, count);
 }
 
 int SrsConsumer::on_play_client_pause(bool is_pause)
@@ -322,6 +363,7 @@ SrsGopCache::SrsGopCache()
 {
     cached_video_count = 0;
     enable_gop_cache = true;
+    audio_after_last_video_count = 0;
 }
 
 SrsGopCache::~SrsGopCache()
@@ -354,11 +396,24 @@ int SrsGopCache::cache(SrsSharedPtrMessage* msg)
     // got video, update the video count if acceptable
     if (msg->header.is_video()) {
         cached_video_count++;
+        audio_after_last_video_count = 0;
     }
     
     // no acceptable video or pure audio, disable the cache.
-    if (cached_video_count == 0) {
+    if (pure_audio()) {
         srs_verbose("ignore any frame util got a h264 video frame.");
+        return ret;
+    }
+    
+    // ok, gop cache enabled, and got an audio.
+    if (msg->header.is_audio()) {
+        audio_after_last_video_count++;
+    }
+    
+    // clear gop cache when pure audio count overflow
+    if (audio_after_last_video_count > __SRS_PURE_AUDIO_GUESS_COUNT) {
+        srs_warn("clear gop cache for guess pure audio overflow");
+        clear();
         return ret;
     }
     
@@ -389,16 +444,18 @@ void SrsGopCache::clear()
     gop_cache.clear();
 
     cached_video_count = 0;
+    audio_after_last_video_count = 0;
 }
     
-int SrsGopCache::dump(SrsConsumer* consumer, int tba, int tbv)
+int SrsGopCache::dump(SrsConsumer* consumer, bool atc, int tba, int tbv, SrsRtmpJitterAlgorithm jitter_algorithm)
 {
     int ret = ERROR_SUCCESS;
     
     std::vector<SrsSharedPtrMessage*>::iterator it;
     for (it = gop_cache.begin(); it != gop_cache.end(); ++it) {
         SrsSharedPtrMessage* msg = *it;
-        if ((ret = consumer->enqueue(msg->copy(), tba, tbv)) != ERROR_SUCCESS) {
+        SrsSharedPtrMessage* copy = msg->copy();
+        if ((ret = consumer->enqueue(copy, atc, tba, tbv, jitter_algorithm)) != ERROR_SUCCESS) {
             srs_error("dispatch cached gop failed. ret=%d", ret);
             return ret;
         }
@@ -413,7 +470,7 @@ bool SrsGopCache::empty()
     return gop_cache.empty();
 }
 
-int64_t SrsGopCache::get_start_time()
+int64_t SrsGopCache::start_time()
 {
     if (empty()) {
         return 0;
@@ -423,6 +480,11 @@ int64_t SrsGopCache::get_start_time()
     srs_assert(msg);
     
     return msg->header.timestamp;
+}
+
+bool SrsGopCache::pure_audio()
+{
+    return cached_video_count == 0;
 }
 
 std::map<std::string, SrsSource*> SrsSource::pool;
@@ -445,7 +507,14 @@ int SrsSource::find(SrsRequest* req, SrsSource** ppsource)
         srs_info("create new source for url=%s, vhost=%s", stream_url.c_str(), vhost.c_str());
     }
     
-    *ppsource = pool[stream_url];
+    // we always update the request of resource, 
+    // for origin auth is on, the token in request maybe invalid,
+    // and we only need to update the token of request, it's simple.
+    if (true) {
+        SrsSource* source = pool[stream_url];
+        source->_req->update_auth(req);
+        *ppsource = source;
+    }
     
     return ret;
 }
@@ -463,6 +532,7 @@ void SrsSource::destroy()
 SrsSource::SrsSource(SrsRequest* req)
 {
     _req = req->copy();
+    jitter_algorithm = SrsRtmpJitterAlgorithmOFF;
     
 #ifdef SRS_AUTO_HLS
     hls = new SrsHls(this);
@@ -548,6 +618,8 @@ int SrsSource::initialize()
     double queue_size = _srs_config->get_queue_length(_req->vhost);
     publish_edge->set_queue_size(queue_size);
     
+    jitter_algorithm = (SrsRtmpJitterAlgorithm)_srs_config->get_time_jitter(_req->vhost);
+    
     return ret;
 }
 
@@ -625,6 +697,19 @@ int SrsSource::on_reload_vhost_queue_length(string vhost)
         publish_edge->set_queue_size(queue_size);
         srs_trace("publish_edge reload queue size success.");
     }
+    
+    return ret;
+}
+
+int SrsSource::on_reload_vhost_time_jitter(string vhost)
+{
+    int ret = ERROR_SUCCESS;
+    
+    if (_req->vhost != vhost) {
+        return ret;
+    }
+    
+    jitter_algorithm = (SrsRtmpJitterAlgorithm)_srs_config->get_time_jitter(_req->vhost);
     
     return ret;
 }
@@ -771,8 +856,8 @@ int SrsSource::on_dvr_request_sh()
     // when reload to start dvr, dvr will never get the sequence header in stream,
     // use the SrsSource.on_dvr_request_sh to push the sequence header to DVR.
     if (cache_metadata) {
-        char* payload = (char*)cache_metadata->payload;
-        int size = (int)cache_metadata->size;
+        char* payload = cache_metadata->payload;
+        int size = cache_metadata->size;
         
         SrsStream stream;
         if ((ret = stream.initialize(payload, size)) != ERROR_SUCCESS) {
@@ -871,8 +956,13 @@ int SrsSource::on_meta_data(SrsMessage* msg, SrsOnMetaDataPacket* metadata)
     }
     
     // add server info to metadata
-    metadata->metadata->set("server", SrsAmf0Any::str(RTMP_SIG_SRS_KEY" "RTMP_SIG_SRS_VERSION" ("RTMP_SIG_SRS_URL_SHORT")"));
-    metadata->metadata->set("authors", SrsAmf0Any::str(RTMP_SIG_SRS_PRIMARY_AUTHROS));
+    metadata->metadata->set("server", SrsAmf0Any::str(RTMP_SIG_SRS_SERVER));
+    metadata->metadata->set("primary", SrsAmf0Any::str(RTMP_SIG_SRS_PRIMARY));
+    metadata->metadata->set("authors", SrsAmf0Any::str(RTMP_SIG_SRS_AUTHROS));
+    
+    // version, for example, 1.0.0
+    // add version to metadata, please donot remove it, for debug.
+    metadata->metadata->set("server_version", SrsAmf0Any::str(RTMP_SIG_SRS_VERSION));
     
     if ((prop = metadata->metadata->get_property("audiosamplerate")) != NULL) {
         if (prop->is_number()) {
@@ -915,7 +1005,8 @@ int SrsSource::on_meta_data(SrsMessage* msg, SrsOnMetaDataPacket* metadata)
     cache_metadata = new SrsSharedPtrMessage();
     
     // dump message to shared ptr message.
-    if ((ret = cache_metadata->initialize(&msg->header, payload, size)) != ERROR_SUCCESS) {
+    // the payload/size managed by cache_metadata, user should not free it.
+    if ((ret = cache_metadata->create(&msg->header, payload, size)) != ERROR_SUCCESS) {
         srs_error("initialize the cache metadata failed. ret=%d", ret);
         return ret;
     }
@@ -926,7 +1017,8 @@ int SrsSource::on_meta_data(SrsMessage* msg, SrsOnMetaDataPacket* metadata)
         std::vector<SrsConsumer*>::iterator it;
         for (it = consumers.begin(); it != consumers.end(); ++it) {
             SrsConsumer* consumer = *it;
-            if ((ret = consumer->enqueue(cache_metadata->copy(), sample_rate, frame_rate)) != ERROR_SUCCESS) {
+            SrsSharedPtrMessage* copy = cache_metadata->copy();
+            if ((ret = consumer->enqueue(copy, atc, sample_rate, frame_rate, jitter_algorithm)) != ERROR_SUCCESS) {
                 srs_error("dispatch the metadata failed. ret=%d", ret);
                 return ret;
             }
@@ -949,32 +1041,50 @@ int SrsSource::on_meta_data(SrsMessage* msg, SrsOnMetaDataPacket* metadata)
     return ret;
 }
 
-int SrsSource::on_audio(SrsMessage* audio)
+int SrsSource::on_audio(SrsMessage* __audio)
 {
     int ret = ERROR_SUCCESS;
     
-    SrsSharedPtrMessage* msg = new SrsSharedPtrMessage();
-    SrsAutoFree(SrsSharedPtrMessage, msg);
-    if ((ret = msg->initialize(audio)) != ERROR_SUCCESS) {
+    // convert __audio to msg, user should not use __audio again.
+    // the payload is transfer to msg, and set to NULL in __audio.
+    SrsSharedPtrMessage msg;
+    if ((ret = msg.create(__audio)) != ERROR_SUCCESS) {
         srs_error("initialize the audio failed. ret=%d", ret);
         return ret;
     }
     srs_verbose("initialize shared ptr audio success.");
     
 #ifdef SRS_AUTO_HLS
-    if ((ret = hls->on_audio(msg->copy())) != ERROR_SUCCESS) {
-        srs_warn("hls process audio message failed, ignore and disable hls. ret=%d", ret);
-        
-        // unpublish, ignore ret.
-        hls->on_unpublish();
-        
-        // ignore.
-        ret = ERROR_SUCCESS;
+    if ((ret = hls->on_audio(msg.copy())) != ERROR_SUCCESS) {
+        // apply the error strategy for hls.
+        // @see https://github.com/simple-rtmp-server/srs/issues/264
+        std::string hls_error_strategy = _srs_config->get_hls_on_error(_req->vhost);
+        if (hls_error_strategy == SRS_CONF_DEFAULT_HLS_ON_ERROR_IGNORE) {
+            srs_warn("hls process audio message failed, ignore and disable hls. ret=%d", ret);
+            
+            // unpublish, ignore ret.
+            hls->on_unpublish();
+            
+            // ignore.
+            ret = ERROR_SUCCESS;
+        } else if (hls_error_strategy == SRS_CONF_DEFAULT_HLS_ON_ERROR_CONTINUE) {
+            // compare the sequence header with audio, continue when it's actually an sequence header.
+            if (ret == ERROR_HLS_DECODE_ERROR && cache_sh_audio && cache_sh_audio->size == msg.size) {
+                srs_warn("the audio is actually a sequence header, ignore this packet.");
+                ret = ERROR_SUCCESS;
+            } else {
+                srs_warn("hls continue audio failed. ret=%d", ret);
+                return ret;
+            }
+        } else {
+            srs_warn("hls disconnect publisher for audio error. ret=%d", ret);
+            return ret;
+        }
     }
 #endif
     
 #ifdef SRS_AUTO_DVR
-    if ((ret = dvr->on_audio(msg->copy())) != ERROR_SUCCESS) {
+    if ((ret = dvr->on_audio(msg.copy())) != ERROR_SUCCESS) {
         srs_warn("dvr process audio message failed, ignore and disable dvr. ret=%d", ret);
         
         // unpublish, ignore ret.
@@ -987,23 +1097,23 @@ int SrsSource::on_audio(SrsMessage* audio)
     
     // copy to all consumer
     if (true) {
-        std::vector<SrsConsumer*>::iterator it;
-        for (it = consumers.begin(); it != consumers.end(); ++it) {
-            SrsConsumer* consumer = *it;
-            if ((ret = consumer->enqueue(msg->copy(), sample_rate, frame_rate)) != ERROR_SUCCESS) {
+        for (int i = 0; i < (int)consumers.size(); i++) {
+            SrsConsumer* consumer = consumers.at(i);
+            SrsSharedPtrMessage* copy = msg.copy();
+            if ((ret = consumer->enqueue(copy, atc, sample_rate, frame_rate, jitter_algorithm)) != ERROR_SUCCESS) {
                 srs_error("dispatch the audio failed. ret=%d", ret);
                 return ret;
             }
         }
         srs_info("dispatch audio success.");
     }
-
+    
     // copy to all forwarders.
     if (true) {
         std::vector<SrsForwarder*>::iterator it;
         for (it = forwarders.begin(); it != forwarders.end(); ++it) {
             SrsForwarder* forwarder = *it;
-            if ((ret = forwarder->on_audio(msg->copy())) != ERROR_SUCCESS) {
+            if ((ret = forwarder->on_audio(msg.copy())) != ERROR_SUCCESS) {
                 srs_error("forwarder process audio message failed. ret=%d", ret);
                 return ret;
             }
@@ -1012,15 +1122,33 @@ int SrsSource::on_audio(SrsMessage* audio)
 
     // cache the sequence header if h264
     // donot cache the sequence header to gop_cache, return here.
-    if (SrsFlvCodec::audio_is_sequence_header(msg->payload, msg->size)) {
+    if (SrsFlvCodec::audio_is_sequence_header(msg.payload, msg.size)) {
         srs_freep(cache_sh_audio);
-        cache_sh_audio = msg->copy();
-        srs_trace("got audio sh, size=%d", msg->header.payload_length);
+        cache_sh_audio = msg.copy();
+        
+        // parse detail audio codec
+        SrsAvcAacCodec codec;
+        SrsCodecSample sample;
+        if ((ret = codec.audio_aac_demux(msg.payload, msg.size, &sample)) != ERROR_SUCCESS) {
+            srs_error("source codec demux audio failed. ret=%d", ret);
+            return ret;
+        }
+        
+        static int flv_sample_sizes[] = {8, 16, 0};
+        static int flv_sound_types[] = {1, 2, 0};
+        srs_trace("%dB audio sh, "
+            "codec(%d, profile=%d, %dchannels, %dkbps, %dHZ), "
+            "flv(%dbits, %dchannels, %dHZ)", 
+            msg.header.payload_length, codec.audio_codec_id,
+            codec.aac_profile, codec.aac_channels, 
+            codec.audio_data_rate / 1000, aac_sample_rates[codec.aac_sample_rate], 
+            flv_sample_sizes[sample.sound_size], flv_sound_types[sample.sound_type], 
+            flv_sample_rates[sample.sound_rate]);
         return ret;
     }
     
     // cache the last gop packets
-    if ((ret = gop_cache->cache(msg)) != ERROR_SUCCESS) {
+    if ((ret = gop_cache->cache(&msg)) != ERROR_SUCCESS) {
         srs_error("shrink gop cache failed. ret=%d", ret);
         return ret;
     }
@@ -1029,42 +1157,60 @@ int SrsSource::on_audio(SrsMessage* audio)
     // if atc, update the sequence header to abs time.
     if (atc) {
         if (cache_sh_audio) {
-            cache_sh_audio->header.timestamp = msg->header.timestamp;
+            cache_sh_audio->header.timestamp = msg.header.timestamp;
         }
         if (cache_metadata) {
-            cache_metadata->header.timestamp = msg->header.timestamp;
+            cache_metadata->header.timestamp = msg.header.timestamp;
         }
     }
     
     return ret;
 }
 
-int SrsSource::on_video(SrsMessage* video)
+int SrsSource::on_video(SrsMessage* __video)
 {
     int ret = ERROR_SUCCESS;
     
-    SrsSharedPtrMessage* msg = new SrsSharedPtrMessage();
-    SrsAutoFree(SrsSharedPtrMessage, msg);
-    if ((ret = msg->initialize(video)) != ERROR_SUCCESS) {
+    // convert __video to msg, user should not use __video again.
+    // the payload is transfer to msg, and set to NULL in __video.
+    SrsSharedPtrMessage msg;
+    if ((ret = msg.create(__video)) != ERROR_SUCCESS) {
         srs_error("initialize the video failed. ret=%d", ret);
         return ret;
     }
     srs_verbose("initialize shared ptr video success.");
     
 #ifdef SRS_AUTO_HLS
-    if ((ret = hls->on_video(msg->copy())) != ERROR_SUCCESS) {
-        srs_warn("hls process video message failed, ignore and disable hls. ret=%d", ret);
-        
-        // unpublish, ignore ret.
-        hls->on_unpublish();
-        
-        // ignore.
-        ret = ERROR_SUCCESS;
+    if ((ret = hls->on_video(msg.copy())) != ERROR_SUCCESS) {
+        // apply the error strategy for hls.
+        // @see https://github.com/simple-rtmp-server/srs/issues/264
+        std::string hls_error_strategy = _srs_config->get_hls_on_error(_req->vhost);
+        if (hls_error_strategy == SRS_CONF_DEFAULT_HLS_ON_ERROR_IGNORE) {
+            srs_warn("hls process video message failed, ignore and disable hls. ret=%d", ret);
+            
+            // unpublish, ignore ret.
+            hls->on_unpublish();
+            
+            // ignore.
+            ret = ERROR_SUCCESS;
+        } else if (hls_error_strategy == SRS_CONF_DEFAULT_HLS_ON_ERROR_CONTINUE) {
+            // compare the sequence header with video, continue when it's actually an sequence header.
+            if (ret == ERROR_HLS_DECODE_ERROR && cache_sh_video && cache_sh_video->size == msg.size) {
+                srs_warn("the video is actually a sequence header, ignore this packet.");
+                ret = ERROR_SUCCESS;
+            } else {
+                srs_warn("hls continue video failed. ret=%d", ret);
+                return ret;
+            }
+        } else {
+            srs_warn("hls disconnect publisher for video error. ret=%d", ret);
+            return ret;
+        }
     }
 #endif
     
 #ifdef SRS_AUTO_DVR
-    if ((ret = dvr->on_video(msg->copy())) != ERROR_SUCCESS) {
+    if ((ret = dvr->on_video(msg.copy())) != ERROR_SUCCESS) {
         srs_warn("dvr process video message failed, ignore and disable dvr. ret=%d", ret);
         
         // unpublish, ignore ret.
@@ -1077,10 +1223,10 @@ int SrsSource::on_video(SrsMessage* video)
     
     // copy to all consumer
     if (true) {
-        std::vector<SrsConsumer*>::iterator it;
-        for (it = consumers.begin(); it != consumers.end(); ++it) {
-            SrsConsumer* consumer = *it;
-            if ((ret = consumer->enqueue(msg->copy(), sample_rate, frame_rate)) != ERROR_SUCCESS) {
+        for (int i = 0; i < (int)consumers.size(); i++) {
+            SrsConsumer* consumer = consumers.at(i);
+            SrsSharedPtrMessage* copy = msg.copy();
+            if ((ret = consumer->enqueue(copy, atc, sample_rate, frame_rate, jitter_algorithm)) != ERROR_SUCCESS) {
                 srs_error("dispatch the video failed. ret=%d", ret);
                 return ret;
             }
@@ -1093,7 +1239,7 @@ int SrsSource::on_video(SrsMessage* video)
         std::vector<SrsForwarder*>::iterator it;
         for (it = forwarders.begin(); it != forwarders.end(); ++it) {
             SrsForwarder* forwarder = *it;
-            if ((ret = forwarder->on_video(msg->copy())) != ERROR_SUCCESS) {
+            if ((ret = forwarder->on_video(msg.copy())) != ERROR_SUCCESS) {
                 srs_error("forwarder process video message failed. ret=%d", ret);
                 return ret;
             }
@@ -1102,15 +1248,28 @@ int SrsSource::on_video(SrsMessage* video)
 
     // cache the sequence header if h264
     // donot cache the sequence header to gop_cache, return here.
-    if (SrsFlvCodec::video_is_sequence_header(msg->payload, msg->size)) {
+    if (SrsFlvCodec::video_is_sequence_header(msg.payload, msg.size)) {
         srs_freep(cache_sh_video);
-        cache_sh_video = msg->copy();
-        srs_trace("got video sh, size=%d", msg->header.payload_length);
+        cache_sh_video = msg.copy();
+        
+        // parse detail audio codec
+        SrsAvcAacCodec codec;
+        SrsCodecSample sample;
+        if ((ret = codec.video_avc_demux(msg.payload, msg.size, &sample)) != ERROR_SUCCESS) {
+            srs_error("source codec demux video failed. ret=%d", ret);
+            return ret;
+        }
+        
+        srs_trace("%dB video sh, "
+            "codec(%d, profile=%d, level=%d, %dx%d, %dkbps, %dfps, %ds)",
+            msg.header.payload_length, codec.video_codec_id,
+            codec.avc_profile, codec.avc_level, codec.width, codec.height,
+            codec.video_data_rate / 1000, codec.frame_rate, codec.duration);
         return ret;
     }
 
     // cache the last gop packets
-    if ((ret = gop_cache->cache(msg)) != ERROR_SUCCESS) {
+    if ((ret = gop_cache->cache(&msg)) != ERROR_SUCCESS) {
         srs_error("gop cache msg failed. ret=%d", ret);
         return ret;
     }
@@ -1119,10 +1278,10 @@ int SrsSource::on_video(SrsMessage* video)
     // if atc, update the sequence header to abs time.
     if (atc) {
         if (cache_sh_video) {
-            cache_sh_video->header.timestamp = msg->header.timestamp;
+            cache_sh_video->header.timestamp = msg.header.timestamp;
         }
         if (cache_metadata) {
-            cache_metadata->header.timestamp = msg->header.timestamp;
+            cache_metadata->header.timestamp = msg.header.timestamp;
         }
     }
     
@@ -1134,7 +1293,7 @@ int SrsSource::on_aggregate(SrsMessage* msg)
     int ret = ERROR_SUCCESS;
     
     SrsStream* stream = aggregate_stream;
-    if ((ret = stream->initialize((char*)msg->payload, msg->size)) != ERROR_SUCCESS) {
+    if ((ret = stream->initialize(msg->payload, msg->size)) != ERROR_SUCCESS) {
         return ret;
     }
     
@@ -1202,8 +1361,8 @@ int SrsSource::on_aggregate(SrsMessage* msg)
 
         if (data_size > 0) {
             o.size = data_size;
-            o.payload = new int8_t[o.size];
-            stream->read_bytes((char*)o.payload, o.size);
+            o.payload = new char[o.size];
+            stream->read_bytes(o.payload, o.size);
         }
         
         if (!stream->require(4)) {
@@ -1228,6 +1387,26 @@ int SrsSource::on_aggregate(SrsMessage* msg)
     return ret;
 }
 
+int SrsSource::acquire_publish()
+{
+    int ret = ERROR_SUCCESS;
+    
+    if (!_can_publish) {
+        ret = ERROR_SYSTEM_STREAM_BUSY;
+        srs_warn("publish lock stream failed, ret=%d", ret);
+        return ret;
+    }
+    
+    _can_publish = false;
+    
+    return ret;
+}
+
+void SrsSource::release_publish()
+{
+    _can_publish = true;
+}
+
 int SrsSource::on_publish()
 {
     int ret = ERROR_SUCCESS;
@@ -1247,6 +1426,7 @@ int SrsSource::on_publish()
         return ret;
     }
     
+    // TODO: FIXME: use initialize to set req.
 #ifdef SRS_AUTO_TRANSCODE
     if ((ret = encoder->on_publish(_req)) != ERROR_SUCCESS) {
         srs_error("start encoder failed. ret=%d", ret);
@@ -1254,6 +1434,7 @@ int SrsSource::on_publish()
     }
 #endif
     
+    // TODO: FIXME: use initialize to set req.
 #ifdef SRS_AUTO_HLS
     if ((ret = hls->on_publish(_req)) != ERROR_SUCCESS) {
         srs_error("start hls failed. ret=%d", ret);
@@ -1261,6 +1442,7 @@ int SrsSource::on_publish()
     }
 #endif
     
+    // TODO: FIXME: use initialize to set req.
 #ifdef SRS_AUTO_DVR
     if ((ret = dvr->on_publish(_req)) != ERROR_SUCCESS) {
         srs_error("start dvr failed. ret=%d", ret);
@@ -1316,38 +1498,42 @@ void SrsSource::on_unpublish()
     // if atc, update the sequence header to gop cache time.
     if (atc && !gop_cache->empty()) {
         if (cache_metadata) {
-            cache_metadata->header.timestamp = gop_cache->get_start_time();
+            cache_metadata->header.timestamp = gop_cache->start_time();
         }
         if (cache_sh_video) {
-            cache_sh_video->header.timestamp = gop_cache->get_start_time();
+            cache_sh_video->header.timestamp = gop_cache->start_time();
         }
         if (cache_sh_audio) {
-            cache_sh_audio->header.timestamp = gop_cache->get_start_time();
+            cache_sh_audio->header.timestamp = gop_cache->start_time();
         }
     }
 
+    int tba = sample_rate;
+    int tbv = frame_rate;
+    SrsRtmpJitterAlgorithm ag = jitter_algorithm;
+    
     // copy metadata.
-    if (cache_metadata && (ret = consumer->enqueue(cache_metadata->copy(), sample_rate, frame_rate)) != ERROR_SUCCESS) {
+    if (cache_metadata && (ret = consumer->enqueue(cache_metadata->copy(), atc, tba, tbv, ag)) != ERROR_SUCCESS) {
         srs_error("dispatch metadata failed. ret=%d", ret);
         return ret;
     }
     srs_info("dispatch metadata success");
     
     // copy sequence header
-    if (cache_sh_video && (ret = consumer->enqueue(cache_sh_video->copy(), sample_rate, frame_rate)) != ERROR_SUCCESS) {
+    if (cache_sh_video && (ret = consumer->enqueue(cache_sh_video->copy(), atc, tba, tbv, ag)) != ERROR_SUCCESS) {
         srs_error("dispatch video sequence header failed. ret=%d", ret);
         return ret;
     }
     srs_info("dispatch video sequence header success");
     
-    if (cache_sh_audio && (ret = consumer->enqueue(cache_sh_audio->copy(), sample_rate, frame_rate)) != ERROR_SUCCESS) {
+    if (cache_sh_audio && (ret = consumer->enqueue(cache_sh_audio->copy(), atc, tba, tbv, ag)) != ERROR_SUCCESS) {
         srs_error("dispatch audio sequence header failed. ret=%d", ret);
         return ret;
     }
     srs_info("dispatch audio sequence header success");
     
     // copy gop cache to client.
-    if ((ret = gop_cache->dump(consumer, sample_rate, frame_rate)) != ERROR_SUCCESS) {
+    if ((ret = gop_cache->dump(consumer, atc, tba, tbv, ag)) != ERROR_SUCCESS) {
         return ret;
     }
     
@@ -1373,11 +1559,6 @@ void SrsSource::on_consumer_destroy(SrsConsumer* consumer)
 void SrsSource::set_cache(bool enabled)
 {
     gop_cache->set(enabled);
-}
-
-bool SrsSource::is_atc()
-{
-    return atc;
 }
 
 int SrsSource::on_edge_start_play()
@@ -1410,11 +1591,16 @@ int SrsSource::create_forwarders()
         
         SrsForwarder* forwarder = new SrsForwarder(this);
         forwarders.push_back(forwarder);
+        
+        // initialize the forwarder with request.
+        if ((ret = forwarder->initialize(_req, forward_server)) != ERROR_SUCCESS) {
+            return ret;
+        }
     
         double queue_size = _srs_config->get_queue_length(_req->vhost);
         forwarder->set_queue_size(queue_size);
         
-        if ((ret = forwarder->on_publish(_req, forward_server)) != ERROR_SUCCESS) {
+        if ((ret = forwarder->on_publish()) != ERROR_SUCCESS) {
             srs_error("start forwarder failed. "
                 "vhost=%s, app=%s, stream=%s, forward-to=%s",
                 _req->vhost.c_str(), _req->app.c_str(), _req->stream.c_str(),
@@ -1436,4 +1622,5 @@ void SrsSource::destroy_forwarders()
     }
     forwarders.clear();
 }
+
 

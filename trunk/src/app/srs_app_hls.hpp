@@ -29,14 +29,30 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 #include <srs_core.hpp>
 
+/**
+* the public data, event HLS disable, others can use it.
+*/
+/**
+* the flv sample rate map
+*/
+extern int flv_sample_rates[];
+
+/**
+* the aac sample rate map
+*/
+extern int aac_sample_rates[];
+
+/**
+* the HLS section, only available when HLS enabled.
+*/
 #ifdef SRS_AUTO_HLS
 
 #include <string>
 #include <vector>
 
+class SrsBuffer;
 class SrsSharedPtrMessage;
 class SrsCodecSample;
-class SrsCodecBuffer;
 class SrsMpegtsFrame;
 class SrsAmf0Object;
 class SrsRtmpJitter;
@@ -45,6 +61,7 @@ class SrsAvcAacCodec;
 class SrsRequest;
 class SrsPithyPrint;
 class SrsSource;
+class SrsFileWriter;
 
 /**
 * jitter correct for audio,
@@ -65,9 +82,11 @@ public:
     /**
     * when buffer start, calc the "correct" pts for ts,
     * @param flv_pts, the flv pts calc from flv header timestamp,
+    * @param sample_rate, the sample rate in format(flv/RTMP packet header).
+    * @param aac_sample_rate, the sample rate in codec(sequence header).
     * @return the calc correct pts.
     */
-    virtual int64_t on_buffer_start(int64_t flv_pts, int sample_rate);
+    virtual int64_t on_buffer_start(int64_t flv_pts, int sample_rate, int aac_sample_rate);
     /**
     * when buffer continue, muxer donot write to file,
     * the audio buffer continue grow and donot need a pts,
@@ -83,15 +102,15 @@ public:
 class SrsTSMuxer
 {
 private:
-    int fd;
+    SrsFileWriter* writer;
     std::string path;
 public:
     SrsTSMuxer();
     virtual ~SrsTSMuxer();
 public:
     virtual int open(std::string _path);
-    virtual int write_audio(SrsMpegtsFrame* af, SrsCodecBuffer* ab);
-    virtual int write_video(SrsMpegtsFrame* vf, SrsCodecBuffer* vb);
+    virtual int write_audio(SrsMpegtsFrame* af, SrsBuffer* ab);
+    virtual int write_video(SrsMpegtsFrame* vf, SrsBuffer* vb);
     virtual void close();
 };
 
@@ -173,12 +192,18 @@ public:
     virtual int segment_open(int64_t segment_start_dts);
     virtual int on_sequence_header();
     /**
-    * whether video overflow,
-    * that is whether the current segment duration >= the segment in config
+    * whether segment overflow,
+    * that is whether the current segment duration>=(the segment in config)
     */
     virtual bool is_segment_overflow();
-    virtual int flush_audio(SrsMpegtsFrame* af, SrsCodecBuffer* ab);
-    virtual int flush_video(SrsMpegtsFrame* af, SrsCodecBuffer* ab, SrsMpegtsFrame* vf, SrsCodecBuffer* vb);
+    /**
+    * whether segment absolutely overflow, for pure audio to reap segment,
+    * that is whether the current segment duration>=2*(the segment in config)
+    * @see https://github.com/simple-rtmp-server/srs/issues/151#issuecomment-71155184
+    */
+    virtual bool is_segment_absolutely_overflow();
+    virtual int flush_audio(SrsMpegtsFrame* af, SrsBuffer* ab);
+    virtual int flush_video(SrsMpegtsFrame* af, SrsBuffer* ab, SrsMpegtsFrame* vf, SrsBuffer* vb);
     /**
     * close segment(ts).
     * @param log_desc the description for log.
@@ -212,22 +237,14 @@ class SrsHlsCache
 private:
     // current frame and buffer
     SrsMpegtsFrame* af;
-    SrsCodecBuffer* ab;
+    SrsBuffer* ab;
     SrsMpegtsFrame* vf;
-    SrsCodecBuffer* vb;
+    SrsBuffer* vb;
 private:
     // the audio cache buffer start pts, to flush audio if full.
     int64_t audio_buffer_start_pts;
     // time jitter for aac
     SrsHlsAacJitter* aac_jitter;
-private:
-    /**
-    * for pure audio HLS application,
-    * the video count used to count the video,
-    * if zero and audio buffer overflow, reap the ts,
-    * just like we got a keyframe.
-    */
-    u_int32_t video_count;
 public:
     SrsHlsCache();
     virtual ~SrsHlsCache();

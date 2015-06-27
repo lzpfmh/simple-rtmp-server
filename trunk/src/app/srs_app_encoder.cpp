@@ -31,7 +31,6 @@ using namespace std;
 #include <srs_app_config.hpp>
 #include <srs_protocol_rtmp.hpp>
 #include <srs_app_pithy_print.hpp>
-#include <srs_protocol_rtmp_stack.hpp>
 #include <srs_app_ffmpeg.hpp>
 #include <srs_kernel_utility.hpp>
 
@@ -46,7 +45,7 @@ static std::vector<std::string> _transcoded_url;
 SrsEncoder::SrsEncoder()
 {
     pthread = new SrsThread(this, SRS_RTMP_ENCODER_SLEEP_US, true);
-    pithy_print = new SrsPithyPrint(SRS_STAGE_ENCODER);
+    pithy_print = new SrsPithyPrint(SRS_CONSTS_STAGE_ENCODER);
 }
 
 SrsEncoder::~SrsEncoder()
@@ -140,10 +139,10 @@ void SrsEncoder::clear_engines()
     
         std::string output = ffmpeg->output();
         
-        std::vector<std::string>::iterator it;
-        it = std::find(_transcoded_url.begin(), _transcoded_url.end(), output);
-        if (it != _transcoded_url.end()) {
-            _transcoded_url.erase(it);
+        std::vector<std::string>::iterator tu_it;
+        tu_it = std::find(_transcoded_url.begin(), _transcoded_url.end(), output);
+        if (tu_it != _transcoded_url.end()) {
+            _transcoded_url.erase(tu_it);
         }
         
         srs_freep(ffmpeg);
@@ -224,8 +223,7 @@ int SrsEncoder::parse_ffmpeg(SrsRequest* req, SrsConfDirective* conf)
     }
     
     // get all engines.
-    std::vector<SrsConfDirective*> engines;
-    _srs_config->get_transcode_engines(conf, engines);
+    std::vector<SrsConfDirective*> engines = _srs_config->get_transcode_engines(conf);
     if (engines.empty()) {
         srs_trace("ignore the empty transcode engine: %s", 
             conf->arg0().c_str());
@@ -262,8 +260,10 @@ int SrsEncoder::initialize_ffmpeg(SrsFFMPEG* ffmpeg, SrsRequest* req, SrsConfDir
 
     std::string input;
     // input stream, from local.
-    // ie. rtmp://127.0.0.1:1935/live/livestream
-    input = "rtmp://127.0.0.1:";
+    // ie. rtmp://localhost:1935/live/livestream
+    input = "rtmp://";
+    input += SRS_CONSTS_LOCALHOST;
+    input += ":";
     input += req->port;
     input += "/";
     input += req->app;
@@ -281,14 +281,14 @@ int SrsEncoder::initialize_ffmpeg(SrsFFMPEG* ffmpeg, SrsRequest* req, SrsConfDir
     
     std::string output = _srs_config->get_engine_output(engine);
     // output stream, to other/self server
-    // ie. rtmp://127.0.0.1:1935/live/livestream_sd
+    // ie. rtmp://localhost:1935/live/livestream_sd
     output = srs_string_replace(output, "[vhost]", req->vhost);
     output = srs_string_replace(output, "[port]", req->port);
     output = srs_string_replace(output, "[app]", req->app);
     output = srs_string_replace(output, "[stream]", req->stream);
     output = srs_string_replace(output, "[engine]", engine->arg0());
     
-    std::string log_file = "/dev/null"; // disabled
+    std::string log_file = SRS_CONSTS_NULL_FILE; // disabled
     // write ffmpeg info to log file.
     if (_srs_config->get_ffmpeg_log_enabled()) {
         log_file = _srs_config->get_ffmpeg_log_dir();
@@ -329,10 +329,11 @@ void SrsEncoder::encoder()
     // reportable
     if (pithy_print->can_print()) {
         // TODO: FIXME: show more info.
-        srs_trace("-> "SRS_LOG_ID_ENCODER" time=%"PRId64", encoders=%d, input=%s", 
+        srs_trace("-> "SRS_CONSTS_LOG_ENCODER" time=%"PRId64", encoders=%d, input=%s", 
             pithy_print->age(), (int)ffmpegs.size(), input_stream_name.c_str());
     }
 }
 
 #endif
+
 

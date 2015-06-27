@@ -32,40 +32,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <string>
 
 class SrsStream;
-
-/**
-* file stream to read/write file.
-*/
-class SrsFileStream
-{
-private:
-    std::string _file;
-    int fd;
-public:
-    SrsFileStream();
-    virtual ~SrsFileStream();
-public:
-    virtual int open_write(std::string file);
-    virtual int open_read(std::string file);
-    virtual void close();
-    virtual bool is_open();
-public:
-    /**
-    * @param pnread, return the read size. NULL to ignore.
-    */
-    virtual int read(void* buf, size_t count, ssize_t* pnread);
-    /**
-    * @param pnwrite, return the write size. NULL to ignore.
-    */
-    virtual int write(void* buf, size_t count, ssize_t* pnwrite);
-    /**
-    * tell current offset of stream.
-    */
-    virtual int64_t tellg();
-    virtual int64_t lseek(int64_t offset);
-    virtual int64_t filesize();
-    virtual void skip(int64_t size);
-};
+class SrsFileWriter;
+class SrsFileReader;
 
 /**
 * encode data to flv file.
@@ -73,7 +41,7 @@ public:
 class SrsFlvEncoder
 {
 private:
-    SrsFileStream* _fs;
+    SrsFileWriter* _fs;
 private:
     SrsStream* tag_stream;
 public:
@@ -81,10 +49,11 @@ public:
     virtual ~SrsFlvEncoder();
 public:
     /**
-    * initialize the underlayer file stream,
-    * user can initialize multiple times to encode multiple flv files.
+    * initialize the underlayer file stream.
+    * @remark user can initialize multiple times to encode multiple flv files.
+    * @remark, user must free the fs, flv encoder never close/free it.
     */
-    virtual int initialize(SrsFileStream* fs);
+    virtual int initialize(SrsFileWriter* fs);
 public:
     /**
     * write flv header.
@@ -97,57 +66,27 @@ public:
     virtual int write_header(char flv_header[9]);
     /**
     * write flv metadata. 
-    * serialize from:
+    * @param data, the amf0 metadata which serialize from:
     *   AMF0 string: onMetaData,
     *   AMF0 object: the metadata object.
+    * @remark assert data is not NULL.
     */
     virtual int write_metadata(char* data, int size);
     /**
     * write audio/video packet.
+    * @remark assert data is not NULL.
     */
     virtual int write_audio(int64_t timestamp, char* data, int size);
     virtual int write_video(int64_t timestamp, char* data, int size);
+public:
     /**
     * get the tag size,
     * including the tag header, body, and 4bytes previous tag size.
+    * @remark assert data_size is not negative.
     */
     static int size_tag(int data_size);
 private:
     virtual int write_tag(char* header, int header_size, char* tag, int tag_size);
-};
-
-/**
-* decode flv fast by only decoding the header and tag.
-*/
-class SrsFlvFastDecoder
-{
-private:
-    SrsFileStream* _fs;
-private:
-    SrsStream* tag_stream;
-public:
-    SrsFlvFastDecoder();
-    virtual ~SrsFlvFastDecoder();
-public:
-    /**
-    * initialize the underlayer file stream,
-    * user can initialize multiple times to encode multiple flv files.
-    */
-    virtual int initialize(SrsFileStream* fs);
-public:
-    /**
-    * read the flv header and size.
-    */
-    virtual int read_header(char** pdata, int* psize);
-    /**
-    * read the sequence header and size.
-    */
-    virtual int read_sequence_header(int64_t* pstart, int* psize);
-public:
-    /**
-    * for start offset, seed to this position and response flv stream.
-    */
-    virtual int lseek(int64_t offset);
 };
 
 /**
@@ -156,7 +95,7 @@ public:
 class SrsFlvDecoder
 {
 private:
-    SrsFileStream* _fs;
+    SrsFileReader* _fs;
 private:
     SrsStream* tag_stream;
 public:
@@ -164,15 +103,76 @@ public:
     virtual ~SrsFlvDecoder();
 public:
     /**
-    * initialize the underlayer file stream,
-    * user can initialize multiple times to decode multiple flv files.
+    * initialize the underlayer file stream
+    * @remark user can initialize multiple times to decode multiple flv files.
+    * @remark, user must free the fs, flv decoder never close/free it.
     */
-    virtual int initialize(SrsFileStream* fs);
+    virtual int initialize(SrsFileReader* fs);
 public:
+    /**
+    * read the flv header, donot including the 4bytes previous tag size.
+    * @remark assert header not NULL.
+    */
     virtual int read_header(char header[9]);
+    /**
+    * read the tag header infos.
+    * @remark assert ptype/pdata_size/ptime not NULL.
+    */
     virtual int read_tag_header(char* ptype, int32_t* pdata_size, u_int32_t* ptime);
+    /**
+    * read the tag data.
+    * @remark assert data not NULL.
+    */
     virtual int read_tag_data(char* data, int32_t size);
-    virtual int read_previous_tag_size(char ts[4]);
+    /**
+    * read the 4bytes previous tag size.
+    * @remark assert previous_tag_size not NULL.
+    */
+    virtual int read_previous_tag_size(char previous_tag_size[4]);
+};
+
+/**
+* decode flv fast by only decoding the header and tag.
+* used for vod flv stream to read the header and sequence header, 
+* then seek to specified offset.
+*/
+class SrsFlvVodStreamDecoder
+{
+private:
+    SrsFileReader* _fs;
+private:
+    SrsStream* tag_stream;
+public:
+    SrsFlvVodStreamDecoder();
+    virtual ~SrsFlvVodStreamDecoder();
+public:
+    /**
+    * initialize the underlayer file stream
+    * @remark user can initialize multiple times to decode multiple flv files.
+    * @remark, user must free the fs, flv decoder never close/free it.
+    */
+    virtual int initialize(SrsFileReader* fs);
+public:
+    /**
+    * read the flv header and its size.
+    * @param header, fill it 13bytes(9bytes header, 4bytes previous tag size).
+    * @remark assert header not NULL.
+    */
+    virtual int read_header_ext(char header[13]);
+    /**
+    * read the sequence header tags offset and its size.
+    * @param pstart, the start offset of sequence header.
+    * @param psize, output the size, (tag header)+(tag body)+(4bytes previous tag size).
+    * @remark we think the first audio/video is sequence header.
+    * @remark assert pstart/psize not NULL.
+    */
+    virtual int read_sequence_header_summary(int64_t* pstart, int* psize);
+public:
+    /**
+    * for start offset, seed to this position and response flv stream.
+    */
+    virtual int lseek(int64_t offset);
 };
 
 #endif
+

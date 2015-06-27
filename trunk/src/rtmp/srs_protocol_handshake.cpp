@@ -35,7 +35,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #ifdef SRS_AUTO_SSL
 
-using namespace srs;
+using namespace _srs_internal;
 
 // for openssl_HMACsha256
 #include <openssl/evp.h>
@@ -43,7 +43,7 @@ using namespace srs;
 // for __openssl_generate_key
 #include <openssl/dh.h>
 
-namespace srs
+namespace _srs_internal
 {
     // 68bytes FMS key which is used to sign the sever packet.
     u_int8_t SrsGenuineFMSKey[] = {
@@ -70,24 +70,72 @@ namespace srs
         0x93, 0xB8, 0xE6, 0x36, 0xCF, 0xEB, 0x31, 0xAE
     }; // 62
     
-    int openssl_HMACsha256(const void* data, int data_size, const void* key, int key_size, void* digest) 
+    int __openssl_HMACsha256(HMAC_CTX* ctx, const void* data, int data_size, void* digest, unsigned int* digest_size) 
     {
-        HMAC_CTX ctx;
+        int ret = ERROR_SUCCESS;
         
-        HMAC_CTX_init(&ctx);
-        HMAC_Init_ex(&ctx, (unsigned char*) key, key_size, EVP_sha256(), NULL);
-        HMAC_Update(&ctx, (unsigned char *) data, data_size);
+        if (HMAC_Update(ctx, (unsigned char *) data, data_size) < 0) {
+            ret = ERROR_OpenSslSha256Update;
+            return ret;
+        }
     
-        unsigned int digest_size;
-        HMAC_Final(&ctx, (unsigned char *) digest, &digest_size);
-        
-        HMAC_CTX_cleanup(&ctx);
-        
-        if (digest_size != 32) {
-            return ERROR_OpenSslSha256DigestSize;
+        if (HMAC_Final(ctx, (unsigned char *) digest, digest_size) < 0) {
+            ret = ERROR_OpenSslSha256Final;
+            return ret;
         }
         
-        return ERROR_SUCCESS;
+        return ret;
+    }
+    /**
+    * sha256 digest algorithm.
+    * @param key the sha256 key, NULL to use EVP_Digest, for instance,
+    *       hashlib.sha256(data).digest().
+    */
+    int openssl_HMACsha256(const void* key, int key_size, const void* data, int data_size, void* digest) 
+    {
+        int ret = ERROR_SUCCESS;
+        
+        unsigned int digest_size = 0;
+        
+        unsigned char* __key = (unsigned char*)key;
+        unsigned char* __digest = (unsigned char*)digest;
+        
+        if (key == NULL) {
+            // use data to digest.
+            // @see ./crypto/sha/sha256t.c
+            // @see ./crypto/evp/digest.c
+            if (EVP_Digest(data, data_size, __digest, &digest_size, EVP_sha256(), NULL) < 0)
+            {
+                ret = ERROR_OpenSslSha256EvpDigest;
+                return ret;
+            }
+        } else {
+            // use key-data to digest.
+            HMAC_CTX ctx;
+            
+            // @remark, if no key, use EVP_Digest to digest,
+            // for instance, in python, hashlib.sha256(data).digest().
+            HMAC_CTX_init(&ctx);
+            
+            if (HMAC_Init_ex(&ctx, __key, key_size, EVP_sha256(), NULL) < 0) {
+                ret = ERROR_OpenSslSha256Init;
+                return ret;
+            }
+            
+            ret = __openssl_HMACsha256(&ctx, data, data_size, __digest, &digest_size);
+            HMAC_CTX_cleanup(&ctx);
+            
+            if (ret != ERROR_SUCCESS) {
+                return ret;
+            }
+        }
+        
+        if (digest_size != 32) {
+            ret = ERROR_OpenSslSha256DigestSize;
+            return ret;
+        }
+        
+        return ret;
     }
     
     #define RFC2409_PRIME_1024 \
@@ -97,12 +145,113 @@ namespace srs
             "E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED" \
             "EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE65381" \
             "FFFFFFFFFFFFFFFF"
-    int __openssl_generate_key(
-        u_int8_t* _private_key, u_int8_t* _public_key, int32_t& size,
-        DH*& pdh, int32_t& bits_count, u_int8_t*& shared_key, int32_t& shared_key_length, BIGNUM*& peer_public_key
-    ){
-        int ret = ERROR_SUCCESS;
     
+    SrsDH::SrsDH()
+    {
+        pdh = NULL;
+    }
+    
+    SrsDH::~SrsDH()
+    {
+        if (pdh != NULL) {
+            if (pdh->p != NULL) {
+                BN_free(pdh->p);
+                pdh->p = NULL;
+            }
+            if (pdh->g != NULL) {
+                BN_free(pdh->g);
+                pdh->g = NULL;
+            }
+            DH_free(pdh);
+            pdh = NULL;
+        }
+    }
+    
+    int SrsDH::initialize(bool ensure_128bytes_public_key)
+    {
+        int ret = ERROR_SUCCESS;
+        
+        for (;;) {
+            if ((ret = do_initialize()) != ERROR_SUCCESS) {
+                return ret;
+            }
+            
+            if (ensure_128bytes_public_key) {
+                int32_t key_size = BN_num_bytes(pdh->pub_key);
+                if (key_size != 128) {
+                    srs_warn("regenerate 128B key, current=%dB", key_size);
+                    continue;
+                }
+            }
+            
+            break;
+        }
+        
+        return ret;
+    }
+    
+    int SrsDH::copy_public_key(char* pkey, int32_t& pkey_size)
+    {
+        int ret = ERROR_SUCCESS;
+        
+        // copy public key to bytes.
+        // sometimes, the key_size is 127, seems ok.
+        int32_t key_size = BN_num_bytes(pdh->pub_key);
+        srs_assert(key_size > 0);
+        
+        // maybe the key_size is 127, but dh will write all 128bytes pkey,
+        // so, donot need to set/initialize the pkey.
+        // @see https://github.com/simple-rtmp-server/srs/issues/165
+        key_size = BN_bn2bin(pdh->pub_key, (unsigned char*)pkey);
+        srs_assert(key_size > 0);
+        
+        // output the size of public key.
+        // @see https://github.com/simple-rtmp-server/srs/issues/165
+        srs_assert(key_size <= pkey_size);
+        pkey_size = key_size;
+        
+        return ret;
+    }
+    
+    int SrsDH::copy_shared_key(const char* ppkey, int32_t ppkey_size, char* skey, int32_t& skey_size)
+    {
+        int ret = ERROR_SUCCESS;
+        
+        BIGNUM* ppk = NULL;
+        if ((ppk = BN_bin2bn((const unsigned char*)ppkey, ppkey_size, 0)) == NULL) {
+            ret = ERROR_OpenSslGetPeerPublicKey;
+            return ret;
+        }
+        
+        // if failed, donot return, do cleanup, @see ./test/dhtest.c:168
+        // maybe the key_size is 127, but dh will write all 128bytes skey,
+        // so, donot need to set/initialize the skey.
+        // @see https://github.com/simple-rtmp-server/srs/issues/165
+        int32_t key_size = DH_compute_key((unsigned char*)skey, ppk, pdh);
+        
+        if (key_size < ppkey_size) {
+            srs_warn("shared key size=%d, ppk_size=%d", key_size, ppkey_size);
+        }
+        
+        if (key_size < 0 || key_size > skey_size) {
+            ret = ERROR_OpenSslComputeSharedKey;
+        } else {
+            skey_size = key_size;
+        }
+        
+        if (ppk) {
+            BN_free(ppk);
+        }
+        
+        return ret;
+    }
+    
+    int SrsDH::do_initialize()
+    {
+        int ret = ERROR_SUCCESS;
+        
+        int32_t bits_count = 1024; 
+        
         //1. Create the DH
         if ((pdh = DH_new()) == NULL) {
             ret = ERROR_OpenSslCreateDH; 
@@ -119,115 +268,27 @@ namespace srs
             return ret;
         }
     
-        //3. initialize p, g and key length
-        if (BN_hex2bn(&pdh->p, RFC2409_PRIME_1024) == 0) {
+        //3. initialize p and g, @see ./test/ectest.c:260
+        if (!BN_hex2bn(&pdh->p, RFC2409_PRIME_1024)) {
             ret = ERROR_OpenSslParseP1024; 
             return ret;
         }
-        if (BN_set_word(pdh->g, 2) != 1) {
+        // @see ./test/bntest.c:1764
+        if (!BN_set_word(pdh->g, 2)) {
             ret = ERROR_OpenSslSetG;
             return ret;
         }
     
-        //4. Set the key length
+        // 4. Set the key length
         pdh->length = bits_count;
     
-        //5. Generate private and public key
-        if (DH_generate_key(pdh) != 1) {
+        // 5. Generate private and public key
+        // @see ./test/dhtest.c:152
+        if (!DH_generate_key(pdh)) {
             ret = ERROR_OpenSslGenerateDHKeys;
             return ret;
         }
-    
-        // CreateSharedKey
-        if (pdh == NULL) {
-            ret = ERROR_OpenSslGenerateDHKeys;
-            return ret;
-        }
-    
-        if (shared_key_length != 0 || shared_key != NULL) {
-            ret = ERROR_OpenSslShareKeyComputed;
-            return ret;
-        }
-    
-        shared_key_length = DH_size(pdh);
-        if (shared_key_length <= 0 || shared_key_length > 1024) {
-            ret = ERROR_OpenSslGetSharedKeySize;
-            return ret;
-        }
-        shared_key = new u_int8_t[shared_key_length];
-        memset(shared_key, 0, shared_key_length);
-    
-        peer_public_key = BN_bin2bn(_private_key, size, 0);
-        if (peer_public_key == NULL) {
-            ret = ERROR_OpenSslGetPeerPublicKey;
-            return ret;
-        }
-    
-        if (DH_compute_key(shared_key, peer_public_key, pdh) == -1) {
-            ret = ERROR_OpenSslComputeSharedKey;
-            return ret;
-        }
-    
-        // CopyPublicKey
-        if (pdh == NULL) {
-            ret = ERROR_OpenSslComputeSharedKey;
-            return ret;
-        }
         
-        int32_t keySize = BN_num_bytes(pdh->pub_key);
-        if ((keySize <= 0) || (size <= 0) || (keySize > size)) {
-            //("CopyPublicKey failed due to either invalid DH state or invalid call"); return ret;
-            ret = ERROR_OpenSslInvalidDHState; 
-            return ret;
-        }
-    
-        if (BN_bn2bin(pdh->pub_key, _public_key) != keySize) {
-            //("Unable to copy key"); return ret;
-            ret = ERROR_OpenSslCopyKey; 
-            return ret;
-        }
-        
-        return ret;
-    }
-    int openssl_generate_key(char* _private_key, char* _public_key, int32_t size)
-    {
-        int ret = ERROR_SUCCESS;
-    
-        // Initialize
-        DH* pdh = NULL;
-        int32_t bits_count = 1024; 
-        u_int8_t* shared_key = NULL;
-        int32_t shared_key_length = 0;
-        BIGNUM* peer_public_key = NULL;
-        
-        ret = __openssl_generate_key(
-            (u_int8_t*)_private_key, (u_int8_t*)_public_key, size,
-            pdh, bits_count, shared_key, shared_key_length, peer_public_key
-        );
-        
-        if (pdh != NULL) {
-            if (pdh->p != NULL) {
-                BN_free(pdh->p);
-                pdh->p = NULL;
-            }
-            if (pdh->g != NULL) {
-                BN_free(pdh->g);
-                pdh->g = NULL;
-            }
-            DH_free(pdh);
-            pdh = NULL;
-        }
-    
-        if (shared_key != NULL) {
-            delete[] shared_key;
-            shared_key = NULL;
-        }
-    
-        if (peer_public_key != NULL) {
-            BN_free(peer_public_key);
-            peer_public_key = NULL;
-        }
-    
         return ret;
     }
     
@@ -282,6 +343,7 @@ namespace srs
         if (key->random0_size > 0) {
             key->random0 = new char[key->random0_size];
             srs_random_generate(key->random0, key->random0_size);
+            snprintf(key->random0, key->random0_size, "%s", RTMP_SIG_SRS_HANDSHAKE);
         }
         
         srs_random_generate(key->key, sizeof(key->key));
@@ -290,6 +352,7 @@ namespace srs
         if (key->random1_size > 0) {
             key->random1 = new char[key->random1_size];
             srs_random_generate(key->random1, key->random1_size);
+            snprintf(key->random1, key->random1_size, "%s", RTMP_SIG_SRS_HANDSHAKE);
         }
     }
     
@@ -374,6 +437,7 @@ namespace srs
         if (digest->random0_size > 0) {
             digest->random0 = new char[digest->random0_size];
             srs_random_generate(digest->random0, digest->random0_size);
+            snprintf(digest->random0, digest->random0_size, "%s", RTMP_SIG_SRS_HANDSHAKE);
         }
         
         srs_random_generate(digest->digest, sizeof(digest->digest));
@@ -382,6 +446,7 @@ namespace srs
         if (digest->random1_size > 0) {
             digest->random1 = new char[digest->random1_size];
             srs_random_generate(digest->random1, digest->random1_size);
+            snprintf(digest->random1, digest->random1_size, "%s", RTMP_SIG_SRS_HANDSHAKE);
         }
     }
 
@@ -557,34 +622,14 @@ namespace srs
         return bytes;
     }
     
-    /**
-    * compare the memory in bytes.
-    */
-    bool srs_bytes_equals(void* pa, void* pb, int size)
-    {
-        u_int8_t* a = (u_int8_t*)pa;
-        u_int8_t* b = (u_int8_t*)pb;
-        
-        if (!a && !b) {
-            return true;
-        }
-        
-        if (!a || !b) {
-            return false;
-        }
-        
-        for(int i = 0; i < size; i++){
-            if(a[i] != b[i]){
-                return false;
-            }
-        }
-    
-        return true;
-    }
-    
     c2s2::c2s2()
     {
         srs_random_generate(random, 1504);
+        
+        int size = snprintf(random, 1504, "%s", RTMP_SIG_SRS_HANDSHAKE);
+        srs_assert(++size < 1504);
+        snprintf(random + 1504 - size, size, "%s", RTMP_SIG_SRS_HANDSHAKE);
+        
         srs_random_generate(digest, 32);
     }
     
@@ -608,15 +653,15 @@ namespace srs
     {
         int ret = ERROR_SUCCESS;
         
-        char temp_key[OpensslHashSize];
-        if ((ret = openssl_HMACsha256(s1->get_digest(), 32, SrsGenuineFPKey, 62, temp_key)) != ERROR_SUCCESS) {
+        char temp_key[__SRS_OpensslHashSize];
+        if ((ret = openssl_HMACsha256(SrsGenuineFPKey, 62, s1->get_digest(), 32, temp_key)) != ERROR_SUCCESS) {
             srs_error("create c2 temp key failed. ret=%d", ret);
             return ret;
         }
         srs_verbose("generate c2 temp key success.");
         
-        char _digest[OpensslHashSize];
-        if ((ret = openssl_HMACsha256(random, 1504, temp_key, 32, _digest)) != ERROR_SUCCESS) {
+        char _digest[__SRS_OpensslHashSize];
+        if ((ret = openssl_HMACsha256(temp_key, 32, random, 1504, _digest)) != ERROR_SUCCESS) {
             srs_error("create c2 digest failed. ret=%d", ret);
             return ret;
         }
@@ -632,15 +677,15 @@ namespace srs
         is_valid = false;
         int ret = ERROR_SUCCESS;
         
-        char temp_key[OpensslHashSize];
-        if ((ret = openssl_HMACsha256(s1->get_digest(), 32, SrsGenuineFPKey, 62, temp_key)) != ERROR_SUCCESS) {
+        char temp_key[__SRS_OpensslHashSize];
+        if ((ret = openssl_HMACsha256(SrsGenuineFPKey, 62, s1->get_digest(), 32, temp_key)) != ERROR_SUCCESS) {
             srs_error("create c2 temp key failed. ret=%d", ret);
             return ret;
         }
         srs_verbose("generate c2 temp key success.");
         
-        char _digest[OpensslHashSize];
-        if ((ret = openssl_HMACsha256(random, 1504, temp_key, 32, _digest)) != ERROR_SUCCESS) {
+        char _digest[__SRS_OpensslHashSize];
+        if ((ret = openssl_HMACsha256(temp_key, 32, random, 1504, _digest)) != ERROR_SUCCESS) {
             srs_error("create c2 digest failed. ret=%d", ret);
             return ret;
         }
@@ -655,15 +700,15 @@ namespace srs
     {
         int ret = ERROR_SUCCESS;
         
-        char temp_key[OpensslHashSize];
-        if ((ret = openssl_HMACsha256(c1->get_digest(), 32, SrsGenuineFMSKey, 68, temp_key)) != ERROR_SUCCESS) {
+        char temp_key[__SRS_OpensslHashSize];
+        if ((ret = openssl_HMACsha256(SrsGenuineFMSKey, 68, c1->get_digest(), 32, temp_key)) != ERROR_SUCCESS) {
             srs_error("create s2 temp key failed. ret=%d", ret);
             return ret;
         }
         srs_verbose("generate s2 temp key success.");
         
-        char _digest[OpensslHashSize];
-        if ((ret = openssl_HMACsha256(random, 1504, temp_key, 32, _digest)) != ERROR_SUCCESS) {
+        char _digest[__SRS_OpensslHashSize];
+        if ((ret = openssl_HMACsha256(temp_key, 32, random, 1504, _digest)) != ERROR_SUCCESS) {
             srs_error("create s2 digest failed. ret=%d", ret);
             return ret;
         }
@@ -679,15 +724,15 @@ namespace srs
         is_valid = false;
         int ret = ERROR_SUCCESS;
         
-        char temp_key[OpensslHashSize];
-        if ((ret = openssl_HMACsha256(c1->get_digest(), 32, SrsGenuineFMSKey, 68, temp_key)) != ERROR_SUCCESS) {
+        char temp_key[__SRS_OpensslHashSize];
+        if ((ret = openssl_HMACsha256(SrsGenuineFMSKey, 68, c1->get_digest(), 32, temp_key)) != ERROR_SUCCESS) {
             srs_error("create s2 temp key failed. ret=%d", ret);
             return ret;
         }
         srs_verbose("generate s2 temp key success.");
         
-        char _digest[OpensslHashSize];
-        if ((ret = openssl_HMACsha256(random, 1504, temp_key, 32, _digest)) != ERROR_SUCCESS) {
+        char _digest[__SRS_OpensslHashSize];
+        if ((ret = openssl_HMACsha256(temp_key, 32, random, 1504, _digest)) != ERROR_SUCCESS) {
             srs_error("create s2 digest failed. ret=%d", ret);
             return ret;
         }
@@ -888,24 +933,37 @@ namespace srs
         time = ::time(NULL);
         version = 0x01000504; // server s1 version
         
-        if (schema == srs_schema0) {
-            srs_key_block_init(&block0.key);
-            srs_digest_block_init(&block1.digest);
-        } else {
-            srs_digest_block_init(&block0.digest);
-            srs_key_block_init(&block1.key);
+        SrsDH dh;
+        
+        // ensure generate 128bytes public key.
+        if ((ret = dh.initialize(true)) != ERROR_SUCCESS) {
+            return ret;
         }
         
         if (schema == srs_schema0) {
-            if ((ret = openssl_generate_key(c1->block0.key.key, block0.key.key, 128)) != ERROR_SUCCESS) {
+            srs_key_block_init(&block0.key);
+            srs_digest_block_init(&block1.digest);
+            
+            // directly generate the public key.
+            // @see: https://github.com/simple-rtmp-server/srs/issues/148
+            int pkey_size = 128;
+            if ((ret = dh.copy_public_key(block0.key.key, pkey_size)) != ERROR_SUCCESS) {
                 srs_error("calc s1 key failed. ret=%d", ret);
                 return ret;
             }
+            srs_assert(pkey_size == 128);
         } else {
-            if ((ret = openssl_generate_key(c1->block1.key.key, block1.key.key, 128)) != ERROR_SUCCESS) {
+            srs_digest_block_init(&block0.digest);
+            srs_key_block_init(&block1.key);
+            
+            // directly generate the public key.
+            // @see: https://github.com/simple-rtmp-server/srs/issues/148
+            int pkey_size = 128;
+            if ((ret = dh.copy_public_key(block1.key.key, pkey_size)) != ERROR_SUCCESS) {
                 srs_error("calc s1 key failed. ret=%d", ret);
                 return ret;
             }
+            srs_assert(pkey_size == 128);
         }
         srs_verbose("calc s1 key success.");
             
@@ -946,8 +1004,8 @@ namespace srs
         srs_assert(c1s1_joined_bytes != NULL);
         SrsAutoFree(char, c1s1_joined_bytes);
         
-        digest = new char[OpensslHashSize];
-        if ((ret = openssl_HMACsha256(c1s1_joined_bytes, 1536 - 32, SrsGenuineFMSKey, 36, digest)) != ERROR_SUCCESS) {
+        digest = new char[__SRS_OpensslHashSize];
+        if ((ret = openssl_HMACsha256(SrsGenuineFMSKey, 36, c1s1_joined_bytes, 1536 - 32, digest)) != ERROR_SUCCESS) {
             srs_error("calc digest for s1 failed. ret=%d", ret);
             return ret;
         }
@@ -973,8 +1031,8 @@ namespace srs
         srs_assert(c1s1_joined_bytes != NULL);
         SrsAutoFree(char, c1s1_joined_bytes);
         
-        digest = new char[OpensslHashSize];
-        if ((ret = openssl_HMACsha256(c1s1_joined_bytes, 1536 - 32, SrsGenuineFPKey, 30, digest)) != ERROR_SUCCESS) {
+        digest = new char[__SRS_OpensslHashSize];
+        if ((ret = openssl_HMACsha256(SrsGenuineFPKey, 30, c1s1_joined_bytes, 1536 - 32, digest)) != ERROR_SUCCESS) {
             srs_error("calc digest for c1 failed. ret=%d", ret);
             return ret;
         }
@@ -1204,7 +1262,7 @@ int SrsComplexHandshake::handshake_with_server(SrsHandshakeBytes* /*hs_bytes*/, 
 int SrsComplexHandshake::handshake_with_server(SrsHandshakeBytes* hs_bytes, ISrsProtocolReaderWriter* io)
 {
     int ret = ERROR_SUCCESS;
-    
+
     ssize_t nsize;
     
     // complex handshake
@@ -1219,6 +1277,7 @@ int SrsComplexHandshake::handshake_with_server(SrsHandshakeBytes* hs_bytes, ISrs
         return ret;
     }
     c1.dump(hs_bytes->c0c1 + 1);
+
     // verify c1
     bool is_valid;
     if ((ret = c1.c1_validate_digest(is_valid)) != ERROR_SUCCESS || !is_valid) {
@@ -1258,10 +1317,12 @@ int SrsComplexHandshake::handshake_with_server(SrsHandshakeBytes* hs_bytes, ISrs
     if ((ret = hs_bytes->create_c2()) != ERROR_SUCCESS) {
         return ret;
     }
+
     c2s2 c2;
     if ((ret = c2.c2_create(&s1)) != ERROR_SUCCESS) {
         return ret;
     }
+
     c2.dump(hs_bytes->c2);
     if ((ret = io->write(hs_bytes->c2, 1536, &nsize)) != ERROR_SUCCESS) {
         srs_warn("complex handshake write c2 failed. ret=%d", ret);
@@ -1274,4 +1335,5 @@ int SrsComplexHandshake::handshake_with_server(SrsHandshakeBytes* hs_bytes, ISrs
     return ret;
 }
 #endif
+
 

@@ -21,58 +21,57 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#include <srs_app_socket.hpp>
+#include <srs_app_st_socket.hpp>
 
 #include <srs_kernel_error.hpp>
-#include <srs_kernel_utility.hpp>
 
-SrsSocket::SrsSocket(st_netfd_t client_stfd)
+SrsStSocket::SrsStSocket(st_netfd_t client_stfd)
 {
     stfd = client_stfd;
     send_timeout = recv_timeout = ST_UTIME_NO_TIMEOUT;
     recv_bytes = send_bytes = 0;
 }
 
-SrsSocket::~SrsSocket()
+SrsStSocket::~SrsStSocket()
 {
 }
 
-bool SrsSocket::is_never_timeout(int64_t timeout_us)
+bool SrsStSocket::is_never_timeout(int64_t timeout_us)
 {
     return timeout_us == (int64_t)ST_UTIME_NO_TIMEOUT;
 }
 
-void SrsSocket::set_recv_timeout(int64_t timeout_us)
+void SrsStSocket::set_recv_timeout(int64_t timeout_us)
 {
     recv_timeout = timeout_us;
 }
 
-int64_t SrsSocket::get_recv_timeout()
+int64_t SrsStSocket::get_recv_timeout()
 {
     return recv_timeout;
 }
 
-void SrsSocket::set_send_timeout(int64_t timeout_us)
+void SrsStSocket::set_send_timeout(int64_t timeout_us)
 {
     send_timeout = timeout_us;
 }
 
-int64_t SrsSocket::get_send_timeout()
+int64_t SrsStSocket::get_send_timeout()
 {
     return send_timeout;
 }
 
-int64_t SrsSocket::get_recv_bytes()
+int64_t SrsStSocket::get_recv_bytes()
 {
     return recv_bytes;
 }
 
-int64_t SrsSocket::get_send_bytes()
+int64_t SrsStSocket::get_send_bytes()
 {
     return send_bytes;
 }
 
-int SrsSocket::read(void* buf, size_t size, ssize_t* nread)
+int SrsStSocket::read(void* buf, size_t size, ssize_t* nread)
 {
     int ret = ERROR_SUCCESS;
     
@@ -83,8 +82,10 @@ int SrsSocket::read(void* buf, size_t size, ssize_t* nread)
     
     // On success a non-negative integer indicating the number of bytes actually read is returned 
     // (a value of 0 means the network connection is closed or end of file is reached).
+    // Otherwise, a value of -1 is returned and errno is set to indicate the error. 
     if (nb_read <= 0) {
-        if (errno == ETIME) {
+        // @see https://github.com/simple-rtmp-server/srs/issues/200
+        if (nb_read < 0 && errno == ETIME) {
             return ERROR_SOCKET_TIMEOUT;
         }
         
@@ -100,7 +101,7 @@ int SrsSocket::read(void* buf, size_t size, ssize_t* nread)
     return ret;
 }
 
-int SrsSocket::read_fully(void* buf, size_t size, ssize_t* nread)
+int SrsStSocket::read_fully(void* buf, size_t size, ssize_t* nread)
 {
     int ret = ERROR_SUCCESS;
     
@@ -111,8 +112,10 @@ int SrsSocket::read_fully(void* buf, size_t size, ssize_t* nread)
     
     // On success a non-negative integer indicating the number of bytes actually read is returned 
     // (a value less than nbyte means the network connection is closed or end of file is reached)
+    // Otherwise, a value of -1 is returned and errno is set to indicate the error. 
     if (nb_read != (ssize_t)size) {
-        if (errno == ETIME) {
+        // @see https://github.com/simple-rtmp-server/srs/issues/200
+        if (nb_read < 0 && errno == ETIME) {
             return ERROR_SOCKET_TIMEOUT;
         }
         
@@ -128,7 +131,7 @@ int SrsSocket::read_fully(void* buf, size_t size, ssize_t* nread)
     return ret;
 }
 
-int SrsSocket::write(void* buf, size_t size, ssize_t* nwrite)
+int SrsStSocket::write(void* buf, size_t size, ssize_t* nwrite)
 {
     int ret = ERROR_SUCCESS;
     
@@ -137,8 +140,11 @@ int SrsSocket::write(void* buf, size_t size, ssize_t* nwrite)
         *nwrite = nb_write;
     }
     
+    // On success a non-negative integer equal to nbyte is returned. 
+    // Otherwise, a value of -1 is returned and errno is set to indicate the error.
     if (nb_write <= 0) {
-        if (errno == ETIME) {
+        // @see https://github.com/simple-rtmp-server/srs/issues/200
+        if (nb_write < 0 && errno == ETIME) {
             return ERROR_SOCKET_TIMEOUT;
         }
         
@@ -150,7 +156,7 @@ int SrsSocket::write(void* buf, size_t size, ssize_t* nwrite)
     return ret;
 }
 
-int SrsSocket::writev(const iovec *iov, int iov_size, ssize_t* nwrite)
+int SrsStSocket::writev(const iovec *iov, int iov_size, ssize_t* nwrite)
 {
     int ret = ERROR_SUCCESS;
     
@@ -159,8 +165,11 @@ int SrsSocket::writev(const iovec *iov, int iov_size, ssize_t* nwrite)
         *nwrite = nb_write;
     }
     
+    // On success a non-negative integer equal to nbyte is returned. 
+    // Otherwise, a value of -1 is returned and errno is set to indicate the error.
     if (nb_write <= 0) {
-        if (errno == ETIME) {
+        // @see https://github.com/simple-rtmp-server/srs/issues/200
+        if (nb_write < 0 && errno == ETIME) {
             return ERROR_SOCKET_TIMEOUT;
         }
         
@@ -171,4 +180,5 @@ int SrsSocket::writev(const iovec *iov, int iov_size, ssize_t* nwrite)
     
     return ret;
 }
+
 

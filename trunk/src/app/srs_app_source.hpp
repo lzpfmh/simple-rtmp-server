@@ -45,7 +45,7 @@ class SrsOnMetaDataPacket;
 class SrsSharedPtrMessage;
 class SrsForwarder;
 class SrsRequest;
-class SrsSocket;
+class SrsStSocket;
 class SrsRtmpServer;
 class SrsEdgeProxyContext;
 #ifdef SRS_AUTO_HLS
@@ -58,6 +58,20 @@ class SrsDvr;
 class SrsEncoder;
 #endif
 class SrsStream;
+
+/**
+* the time jitter algorithm:
+* 1. full, to ensure stream start at zero, and ensure stream monotonically increasing.
+* 2. zero, only ensure sttream start at zero, ignore timestamp jitter.
+* 3. off, disable the time jitter algorithm, like atc.
+*/
+enum SrsRtmpJitterAlgorithm
+{
+    SrsRtmpJitterAlgorithmFULL = 0x01,
+    SrsRtmpJitterAlgorithmZERO,
+    SrsRtmpJitterAlgorithmOFF
+};
+int _srs_time_jitter_string2int(std::string time_jitter);
 
 /**
 * time jitter detect and correct,
@@ -74,8 +88,12 @@ public:
 public:
     /**
     * detect the time jitter and correct it.
+    * @param tba, the audio timebase, used to calc the "right" delta if jitter detected.
+    * @param tbv, the video timebase, used to calc the "right" delta if jitter detected.
+    * @param start_at_zero whether ensure stream start at zero.
+    * @param mono_increasing whether ensure stream is monotonically inscreasing.
     */
-    virtual int correct(SrsSharedPtrMessage* msg, int tba, int tbv);
+    virtual int correct(SrsSharedPtrMessage* msg, int tba, int tbv, SrsRtmpJitterAlgorithm ag);
     /**
     * get current client time, the last packet time.
     */
@@ -110,11 +128,11 @@ public:
     virtual int enqueue(SrsSharedPtrMessage* msg);
     /**
     * get packets in consumer queue.
-    * @pmsgs SrsMessages*[], output the prt array.
-    * @count the count in array.
-    * @max_count the max count to dequeue, 0 to dequeue all.
+    * @pmsgs SrsMessages*[], used to store the msgs, user must alloc it.
+    * @count the count in array, output param.
+    * @max_count the max count to dequeue, must be positive.
     */
-    virtual int get_packets(int max_count, SrsSharedPtrMessage**& pmsgs, int& count);
+    virtual int dump_packets(int max_count, SrsSharedPtrMessage** pmsgs, int& count);
 private:
     /**
     * remove a gop from the front.
@@ -155,19 +173,21 @@ public:
     virtual int get_time();
     /**
     * enqueue an shared ptr message.
+    * @param whether atc, donot use jitter correct if true.
     * @param tba timebase of audio.
     *         used to calc the audio time delta if time-jitter detected.
     * @param tbv timebase of video.
     *        used to calc the video time delta if time-jitter detected.
+    * @param ag the algorithm of time jitter.
     */
-    virtual int enqueue(SrsSharedPtrMessage* msg, int tba, int tbv);
+    virtual int enqueue(SrsSharedPtrMessage* msg, bool atc, int tba, int tbv, SrsRtmpJitterAlgorithm ag);
     /**
     * get packets in consumer queue.
-    * @pmsgs SrsMessages*[], output the prt array.
-    * @count the count in array.
-    * @max_count the max count to dequeue, 0 to dequeue all.
+    * @pmsgs SrsMessages*[], used to store the msgs, user must alloc it.
+    * @count the count in array, output param.
+    * @max_count the max count to dequeue, must be positive.
     */
-    virtual int get_packets(int max_count, SrsSharedPtrMessage**& pmsgs, int& count);
+    virtual int dump_packets(int max_count, SrsSharedPtrMessage** pmsgs, int& count);
     /**
     * when client send the pause message.
     */
@@ -193,6 +213,19 @@ private:
     */
     int cached_video_count;
     /**
+    * when user disabled video when publishing, and gop cache enalbed,
+    * we will cache the audio/video for we already got video, but we never
+    * know when to clear the gop cache, for there is no video in future,
+    * so we must guess whether user disabled the video.
+    * when we got some audios after laster video, for instance, 600 audio packets,
+    * about 3s(26ms per packet) 115 audio packets, clear gop cache.
+    * 
+    * @remark, it is ok for performance, for when we clear the gop cache,
+    *       gop cache is disabled for pure audio stream.
+    * @see: https://github.com/simple-rtmp-server/srs/issues/124
+    */
+    int audio_after_last_video_count;
+    /**
     * cached gop.
     */
     std::vector<SrsSharedPtrMessage*> gop_cache;
@@ -200,6 +233,9 @@ public:
     SrsGopCache();
     virtual ~SrsGopCache();
 public:
+    /**
+    * to enable or disable the gop cache.
+    */
     virtual void set(bool enabled);
     /**
     * only for h264 codec
@@ -207,14 +243,31 @@ public:
     * 2. clear gop when got keyframe.
     */
     virtual int cache(SrsSharedPtrMessage* msg);
+    /**
+    * clear the gop cache.
+    */
     virtual void clear();
-    virtual int dump(SrsConsumer* consumer, int tba, int tbv);
+    /**
+    * dump the cached gop to consumer.
+    */
+    virtual int dump(SrsConsumer* consumer, 
+        bool atc, int tba, int tbv, SrsRtmpJitterAlgorithm jitter_algorithm
+    );
     /**
     * used for atc to get the time of gop cache,
     * the atc will adjust the sequence header timestamp to gop cache.
     */
     virtual bool empty();
-    virtual int64_t get_start_time();
+    /**
+    * get the start time of gop cache, in ms.
+    * @return 0 if no packets.
+    */
+    virtual int64_t start_time();
+    /**
+    * whether current stream is pure audio,
+    * when no video in gop cache, the stream is pure audio right now.
+    */
+    virtual bool pure_audio();
 };
 
 /**
@@ -248,6 +301,8 @@ private:
     SrsRequest* _req;
     // to delivery stream to clients.
     std::vector<SrsConsumer*> consumers;
+    // the time jitter algorithm for vhost.
+    SrsRtmpJitterAlgorithm jitter_algorithm;
     // hls handler.
 #ifdef SRS_AUTO_HLS
     SrsHls* hls;
@@ -309,6 +364,7 @@ public:
     virtual int on_reload_vhost_atc(std::string vhost);
     virtual int on_reload_vhost_gop_cache(std::string vhost);
     virtual int on_reload_vhost_queue_length(std::string vhost);
+    virtual int on_reload_vhost_time_jitter(std::string vhost);
     virtual int on_reload_vhost_forward(std::string vhost);
     virtual int on_reload_vhost_hls(std::string vhost);
     virtual int on_reload_vhost_dvr(std::string vhost);
@@ -333,6 +389,13 @@ public:
     virtual int on_video(SrsMessage* video);
     virtual int on_aggregate(SrsMessage* msg);
     /**
+    * the pre-publish is we are very sure we are
+    * trying to publish stream, please lock the resource,
+    * and we use release_publish() to release the resource.
+    */
+    virtual int acquire_publish();
+    virtual void release_publish();
+    /**
     * publish stream event notify.
     * @param _req the request from client, the source will deep copy it,
     *         for when reload the request of client maybe invalid.
@@ -346,8 +409,6 @@ public:
     virtual void set_cache(bool enabled);
 // internal
 public:
-    // for consumer, atc feature.
-    virtual bool is_atc();
     // for edge, when play edge stream, check the state
     virtual int on_edge_start_play();
     // for edge, when publish edge stream, check the state

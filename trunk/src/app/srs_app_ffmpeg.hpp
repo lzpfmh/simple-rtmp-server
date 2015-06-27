@@ -29,7 +29,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 #include <srs_core.hpp>
 
-#ifdef SRS_AUTO_FFMPEG
+#ifdef SRS_AUTO_FFMPEG_STUB
 
 #include <string>
 #include <vector>
@@ -51,6 +51,8 @@ private:
 private:
     std::string                 ffmpeg;
     std::string                 _iparams;
+    std::string                 iformat;
+    std::string                 input;
     std::vector<std::string>    vfilter;
     std::string                 vcodec;
     int                         vbitrate;
@@ -66,13 +68,14 @@ private:
     int                         asample_rate;
     int                         achannels;
     std::vector<std::string>    aparams;
+    std::string                 oformat;
     std::string                 _output;
-    std::string                 input;
 public:
     SrsFFMPEG(std::string ffmpeg_bin);
     virtual ~SrsFFMPEG();
 public:
     virtual void set_iparams(std::string iparams);
+    virtual void set_oformat(std::string format);
     virtual std::string output();
 public:
     virtual int initialize(std::string in, std::string out, std::string log);
@@ -86,3 +89,4 @@ public:
 #endif
 
 #endif
+

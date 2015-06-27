@@ -34,9 +34,13 @@ echo "depends tools are ok"
 OS_IS_UBUNTU=NO
 function Ubuntu_prepare()
 {
-    uname -v|grep Ubuntu >/dev/null 2>&1
-    ret=$?; if [[ 0 -ne $ret ]]; then
-        return 0;
+    if [ $SRS_CUBIE = YES ]; then
+        echo "for cubieboard, use ubuntu prepare"
+    else
+        uname -v|grep Ubuntu >/dev/null 2>&1
+        ret=$?; if [[ 0 -ne $ret ]]; then
+            return 0;
+        fi
     fi
 
     OS_IS_UBUNTU=YES
@@ -97,13 +101,6 @@ function Ubuntu_prepare()
             require_sudoer "sudo apt-get install -y --force-yes zlib1g-dev"
             sudo apt-get install -y --force-yes zlib1g-dev; ret=$?; if [[ 0 -ne $ret ]]; then return $ret; fi
             echo "install zlib1g-dev success"
-        fi
-        
-        if [[ ! -d /usr/include/freetype2 ]]; then
-            echo "install libfreetype6-dev"
-            require_sudoer "sudo apt-get install -y --force-yes libfreetype6-dev"
-            sudo apt-get install -y --force-yes libfreetype6-dev; ret=$?; if [[ 0 -ne $ret ]]; then return $ret; fi
-            echo "install libfreetype6-dev success"
         fi
     fi
     
@@ -205,13 +202,6 @@ function Centos_prepare()
             sudo yum install -y zlib-devel; ret=$?; if [[ 0 -ne $ret ]]; then return $ret; fi
             echo "install zlib-devel success"
         fi
-        
-        if [[ ! -d /usr/include/freetype2 ]]; then
-            echo "install freetype-devel"
-            require_sudoer "sudo yum install -y freetype-devel"
-            sudo yum install -y freetype-devel; ret=$?; if [[ 0 -ne $ret ]]; then return $ret; fi
-            echo "install freetype-devel success"
-        fi
     fi
     
     # for arm, install the cross build tool chain.
@@ -224,31 +214,124 @@ function Centos_prepare()
     return 0
 }
 Centos_prepare; ret=$?; if [[ 0 -ne $ret ]]; then echo "CentOS prepare failed, ret=$ret"; exit $ret; fi
+#####################################################################################
+# for OSX, auto install tools by brew
+#####################################################################################
+OS_IS_OSX=NO
+function OSX_prepare()
+{
+    SYS_NAME=`uname -s`
+    if [ $SYS_NAME != Darwin ]; then
+        echo "This is not Darwin OSX"
+        return 0;
+    fi
+
+    OS_IS_OSX=YES
+    echo "OSX detected, install tools if needed"
+    
+    gcc --help >/dev/null 2>&1; ret=$?; if [[ 0 -ne $ret ]]; then
+        echo "install gcc"
+        require_sudoer "sudo brew install gcc"
+        sudo brew install gcc; ret=$?; if [[ 0 -ne $ret ]]; then return $ret; fi
+        echo "install gcc success"
+    fi
+    
+    g++ --help >/dev/null 2>&1; ret=$?; if [[ 0 -ne $ret ]]; then
+        echo "install gcc-c++"
+        require_sudoer "sudo brew install gcc-c++"
+        sudo brew install gcc-c++; ret=$?; if [[ 0 -ne $ret ]]; then return $ret; fi
+        echo "install gcc-c++ success"
+    fi
+    
+    make --help >/dev/null 2>&1; ret=$?; if [[ 0 -ne $ret ]]; then
+        echo "install make"
+        require_sudoer "sudo brew install make"
+        sudo brew install make; ret=$?; if [[ 0 -ne $ret ]]; then return $ret; fi
+        echo "install make success"
+    fi
+    
+    patch --help >/dev/null 2>&1; ret=$?; if [[ 0 -ne $ret ]]; then
+        echo "install patch"
+        require_sudoer "sudo brew install patch"
+        sudo brew install patch; ret=$?; if [[ 0 -ne $ret ]]; then return $ret; fi
+        echo "install patch success"
+    fi
+    
+    if [ $SRS_FFMPEG_TOOL = YES ]; then
+        automake --help >/dev/null 2>&1; ret=$?; if [[ 0 -ne $ret ]]; then
+            echo "install automake"
+            require_sudoer "sudo brew install automake"
+            sudo brew install automake; ret=$?; if [[ 0 -ne $ret ]]; then return $ret; fi
+            echo "install automake success"
+        fi
+        
+        autoconf --help >/dev/null 2>&1; ret=$?; if [[ 0 -ne $ret ]]; then
+            echo "install autoconf"
+            require_sudoer "sudo brew install autoconf"
+            sudo brew install autoconf; ret=$?; if [[ 0 -ne $ret ]]; then return $ret; fi
+            echo "install autoconf success"
+        fi
+        
+        libtool --help >/dev/null 2>&1; ret=$?; if [[ 0 -ne $ret ]]; then
+            echo "install libtool"
+            require_sudoer "sudo brew install libtool"
+            sudo brew install libtool; ret=$?; if [[ 0 -ne $ret ]]; then return $ret; fi
+            echo "install libtool success"
+        fi
+        
+        if [[ ! -f /usr/include/pcre.h ]]; then
+            echo "install pcre-devel"
+            require_sudoer "sudo brew install pcre-devel"
+            sudo brew install pcre-devel; ret=$?; if [[ 0 -ne $ret ]]; then return $ret; fi
+            echo "install pcre-devel success"
+        fi
+        
+        if [[ ! -f /usr/include/zlib.h ]]; then
+            echo "install zlib-devel"
+            require_sudoer "sudo brew install zlib-devel"
+            sudo brew install zlib-devel; ret=$?; if [[ 0 -ne $ret ]]; then return $ret; fi
+            echo "install zlib-devel success"
+        fi
+    fi
+    
+    echo "OSX install tools success"
+    return 0
+}
+OSX_prepare; ret=$?; if [[ 0 -ne $ret ]]; then echo "OSX prepare failed, ret=$ret"; exit $ret; fi
+
+# by winlin, disable other system.
+if [[ $OS_IS_UBUNTU = NO && $OS_IS_CENTOS = NO && SRS_PI = NO && $SRS_EMBEDED_CPU = NO ]]; then
+    echo "only support Centos/Ubuntu/RaspberryPi, actual is `uname -s`"
+    exit 1
+fi
 
 #####################################################################################
 # st-1.9
 #####################################################################################
 # check the arm flag file, if flag changed, need to rebuild the st.
+_ST_MAKE=linux-debug
 if [ $SRS_EMBEDED_CPU = YES ]; then
     # ok, arm specified, if the flag filed does not exists, need to rebuild.
-    if [[ -f ${SRS_OBJS}/_flag.st.arm.tmp && -f ${SRS_OBJS}/st/libst.a && -f ${SRS_OBJS}/st/libst.so ]]; then
+    if [[ -f ${SRS_OBJS}/_flag.st.arm.tmp && -f ${SRS_OBJS}/st/libst.a ]]; then
         echo "st-1.9t for arm is ok.";
     else
         # TODO: FIXME: patch the bug.
-        # patch st for arm, @see: https://github.com/winlinvip/simple-rtmp-server/wiki/SrsLinuxArm#st-arm-bug-fix
+        # patch st for arm, @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_SrsLinuxArm#st-arm-bug-fix
         echo "build st-1.9t for arm"; 
         (
             rm -rf ${SRS_OBJS}/st-1.9 && cd ${SRS_OBJS} && 
             unzip -q ../3rdparty/st-1.9.zip && cd st-1.9 && 
             patch -p0 < ../../3rdparty/patches/1.st.arm.patch &&
-            make CC=${SrsArmCC} AR=${SrsArmAR} LD=${SrsArmLD} RANDLIB=${SrsArmRANDLIB} EXTRA_CFLAGS="-DMD_HAVE_EPOLL" linux-debug &&
+            make CC=${SrsArmCC} AR=${SrsArmAR} LD=${SrsArmLD} RANDLIB=${SrsArmRANDLIB} EXTRA_CFLAGS="-DMD_HAVE_EPOLL" ${_ST_MAKE} &&
             cd .. && rm -rf st && ln -sf st-1.9/obj st &&
             cd .. && touch ${SRS_OBJS}/_flag.st.arm.tmp
         )
     fi
 else
-    # arm not specified, if exists flag, need to rebuild for no-arm platform.
-    if [[ ! -f ${SRS_OBJS}/_flag.st.arm.tmp && -f ${SRS_OBJS}/st/libst.a && -f ${SRS_OBJS}/st/libst.so ]]; then
+    if [ $SRS_OSX = YES ]; then 
+        _ST_MAKE=darwin-debug
+    fi
+    if [[ ! -f ${SRS_OBJS}/_flag.st.arm.tmp && -f ${SRS_OBJS}/st/libst.a ]]; then
         echo "st-1.9t is ok.";
     else
         echo "build st-1.9t"; 
@@ -258,7 +341,7 @@ else
             echo "we alaways patch the st, for we may build srs under arm directly" &&
             echo "the 1.st.arm.patch is ok for x86 because it's only modify code under macro linux arm" &&
             patch -p0 < ../../3rdparty/patches/1.st.arm.patch &&
-            make EXTRA_CFLAGS="-DMD_HAVE_EPOLL" linux-debug &&
+            make ${_ST_MAKE} &&
             cd .. && rm -rf st && ln -sf st-1.9/obj st &&
             cd .. && rm -f ${SRS_OBJS}/_flag.st.arm.tmp
         )
@@ -266,16 +349,28 @@ else
 fi
 # check status
 ret=$?; if [[ $ret -ne 0 ]]; then echo "build st-1.9 failed, ret=$ret"; exit $ret; fi
-if [ ! -f ${SRS_OBJS}/st/libst.a ]; then echo "build st-1.9 failed."; exit -1; fi
-if [ ! -f ${SRS_OBJS}/st/libst.so ]; then echo "build st-1.9 failed."; exit -1; fi
+if [ ! -f ${SRS_OBJS}/st/libst.a ]; then echo "build st-1.9 static lib failed."; exit -1; fi
 
 #####################################################################################
 # http-parser-2.1
 #####################################################################################
 # check the arm flag file, if flag changed, need to rebuild the st.
 if [ $SRS_HTTP_PARSER = YES ]; then
+    # for osx(darwin), donot use sed.
+    if [ $SRS_OSX = YES ]; then 
+        if [[ -f ${SRS_OBJS}/hp/http_parser.h && -f ${SRS_OBJS}/hp/libhttp_parser.a ]]; then
+            echo "http-parser-2.1 is ok.";
+        else
+            echo "build http-parser-2.1 for osx(darwin)";
+            (
+                rm -rf ${SRS_OBJS}/http-parser-2.1 && cd ${SRS_OBJS} && unzip -q ../3rdparty/http-parser-2.1.zip && 
+                cd http-parser-2.1 && 
+                make package &&
+                cd .. && rm -rf hp && ln -sf http-parser-2.1 hp
+            )
+        fi
     # ok, arm specified, if the flag filed does not exists, need to rebuild.
-    if [ $SRS_EMBEDED_CPU = YES ]; then
+    elif [ $SRS_EMBEDED_CPU = YES ]; then
         if [[ -f ${SRS_OBJS}/_flag.st.hp.tmp && -f ${SRS_OBJS}/hp/http_parser.h && -f ${SRS_OBJS}/hp/libhttp_parser.a ]]; then
             echo "http-parser-2.1 for arm is ok.";
         else
@@ -477,6 +572,24 @@ fi
 #####################################################################################
 # openssl, for rtmp complex handshake
 #####################################################################################
+# extra configure options
+CONFIGURE_TOOL="./config"
+EXTRA_CONFIGURE=""
+if [ $SRS_OSX = YES ]; then
+    CONFIGURE_TOOL="./Configure"
+    arch=`uname -m` && echo "OSX $arch";
+    if [ $arch = x86_64 ]; then
+        echo "configure 64bit openssl";
+        EXTRA_CONFIGURE=darwin64-x86_64-cc
+    else
+        echo "configure 32bit openssl";
+        EXTRA_CONFIGURE=darwin-i386-cc
+    fi
+    echo "openssl extra config: $CONFIGURE_TOOL $EXTRA_CONFIGURE"
+fi
+if [ $SRS_EMBEDED_CPU = YES ]; then
+    CONFIGURE_TOOL="./Configure"
+fi
 # @see http://www.openssl.org/news/secadv_20140407.txt
 # Affected users should upgrade to OpenSSL 1.0.1g. Users unable to immediately
 # upgrade can alternatively recompile OpenSSL with -DOPENSSL_NO_HEARTBEATS.
@@ -494,10 +607,10 @@ if [ $SRS_SSL = YES ]; then
                 (
                     rm -rf ${SRS_OBJS}/openssl-1.0.1f && cd ${SRS_OBJS} && 
                     unzip -q ../3rdparty/openssl-1.0.1f.zip && cd openssl-1.0.1f && 
-                    ./Configure --prefix=`pwd`/_release -no-shared no-asm linux-armv4 -DOPENSSL_NO_HEARTBEATS && 
+                    $CONFIGURE_TOOL --prefix=`pwd`/_release -no-shared no-asm linux-armv4 -DOPENSSL_NO_HEARTBEATS ${EXTRA_CONFIGURE} && 
                     make CC=${SrsArmCC} GCC=${SrsArmGCC} AR="${SrsArmAR} r" \
                         LD=${SrsArmLD} LINK=${SrsArmGCC} RANDLIB=${SrsArmRANDLIB} && 
-                    make install &&
+                    make install_sw &&
                     cd .. && rm -rf openssl && ln -sf openssl-1.0.1f/_release openssl &&
                     cd .. && touch ${SRS_OBJS}/_flag.ssl.arm.tmp
                 )
@@ -511,8 +624,8 @@ if [ $SRS_SSL = YES ]; then
                 (
                     rm -rf ${SRS_OBJS}/openssl-1.0.1f && cd ${SRS_OBJS} && 
                     unzip -q ../3rdparty/openssl-1.0.1f.zip && cd openssl-1.0.1f && 
-                    ./config --prefix=`pwd`/_release -no-shared -DOPENSSL_NO_HEARTBEATS && 
-                    make && make install &&
+                    $CONFIGURE_TOOL --prefix=`pwd`/_release -no-shared -DOPENSSL_NO_HEARTBEATS ${EXTRA_CONFIGURE} && 
+                    make && make install_sw &&
                     cd .. && rm -rf openssl && ln -sf openssl-1.0.1f/_release openssl &&
                     cd .. && rm -f ${SRS_OBJS}/_flag.ssl.arm.tmp
                 )
@@ -550,12 +663,19 @@ if [ $SRS_FFMPEG_TOOL = YES ]; then
     if [ ! -f ${SRS_OBJS}/ffmpeg/bin/ffmpeg ]; then echo "build ffmpeg-2.1 failed."; exit -1; fi
 fi
 
+# whether compile ffmpeg tool
+if [ $SRS_FFMPEG_TOOL = YES ]; then
+    echo "#define SRS_AUTO_FFMPEG_TOOL" >> $SRS_AUTO_HEADERS_H
+else
+    echo "#undef SRS_AUTO_FFMPEG_TOOL" >> $SRS_AUTO_HEADERS_H
+fi
+
 # whatever the FFMPEG tools, if transcode and ingest specified,
 # srs always compile the FFMPEG tool stub which used to start the FFMPEG process.
 if [ $SRS_FFMPEG_STUB = YES ]; then
-    echo "#define SRS_AUTO_FFMPEG" >> $SRS_AUTO_HEADERS_H
+    echo "#define SRS_AUTO_FFMPEG_STUB" >> $SRS_AUTO_HEADERS_H
 else
-    echo "#undef SRS_AUTO_FFMPEG" >> $SRS_AUTO_HEADERS_H
+    echo "#undef SRS_AUTO_FFMPEG_STUB" >> $SRS_AUTO_HEADERS_H
 fi
 
 if [ $SRS_TRANSCODE = YES ]; then
@@ -570,8 +690,15 @@ else
     echo "#undef SRS_AUTO_INGEST" >> $SRS_AUTO_HEADERS_H
 fi
 
+# for statistic.
+if [ $SRS_STAT = YES ]; then
+    echo "#define SRS_AUTO_STAT" >> $SRS_AUTO_HEADERS_H
+else
+    echo "#undef SRS_AUTO_STAT" >> $SRS_AUTO_HEADERS_H
+fi
+
 #####################################################################################
-# build research code
+# build research code, librtmp
 #####################################################################################
 if [ $SRS_RESEARCH = YES ]; then
     mkdir -p ${SRS_OBJS}/research
@@ -581,6 +708,14 @@ if [ $SRS_RESEARCH = YES ]; then
 
     (cd research/ffempty && make ${SRS_JOBS} && mv ffempty ../../${SRS_OBJS}/research)
     ret=$?; if [[ $ret -ne 0 ]]; then echo "build research/ffempty failed, ret=$ret"; exit $ret; fi
+fi
+
+if [ $SRS_LIBRTMP = YES ]; then
+    mkdir -p ${SRS_OBJS}/research
+    
+    # librtmp
+    (cd research/librtmp && mkdir -p objs && ln -sf `pwd`/objs ../../${SRS_OBJS}/research/librtmp)
+    ret=$?; if [[ $ret -ne 0 ]]; then echo "link research/librtmp failed, ret=$ret"; exit $ret; fi
 fi
 
 #####################################################################################
@@ -669,7 +804,25 @@ fi
 
 echo "" >> $SRS_AUTO_HEADERS_H
 
+# for log level compile settings
+if [ $SRS_LOG_VERBOSE = YES ]; then
+    echo "#define SRS_AUTO_VERBOSE" >> $SRS_AUTO_HEADERS_H
+else
+    echo "#undef SRS_AUTO_VERBOSE" >> $SRS_AUTO_HEADERS_H
+fi
+if [ $SRS_LOG_INFO = YES ]; then
+    echo "#define SRS_AUTO_INFO" >> $SRS_AUTO_HEADERS_H
+else
+    echo "#undef SRS_AUTO_INFO" >> $SRS_AUTO_HEADERS_H
+fi
+if [ $SRS_LOG_TRACE = YES ]; then
+    echo "#define SRS_AUTO_TRACE" >> $SRS_AUTO_HEADERS_H
+else
+    echo "#undef SRS_AUTO_TRACE" >> $SRS_AUTO_HEADERS_H
+fi
+
 # prefix
+echo "" >> $SRS_AUTO_HEADERS_H
 echo "#define SRS_AUTO_PREFIX \"${SRS_PREFIX}\"" >> $SRS_AUTO_HEADERS_H
 
 echo "" >> $SRS_AUTO_HEADERS_H
@@ -677,11 +830,7 @@ echo "" >> $SRS_AUTO_HEADERS_H
 #####################################################################################
 # generated the contributors from AUTHORS.txt
 #####################################################################################
-if [ $OS_IS_CENTOS = YES ]; then
-    SRS_CONSTRIBUTORS=`cat ../AUTHORS.txt|grep "*"|awk -F '* ' '{print $2}'`
-else
-    SRS_CONSTRIBUTORS=`cat ../AUTHORS.txt|grep "*"|awk -F '\* ' '{print $2}'`
-fi
+SRS_CONSTRIBUTORS=`cat ../AUTHORS.txt|grep "*"|awk '{print $2}'`
 echo "#define SRS_AUTO_CONSTRIBUTORS \"\\" >> $SRS_AUTO_HEADERS_H
 for CONTRIBUTOR in $SRS_CONSTRIBUTORS; do
     echo "${CONTRIBUTOR} \\" >> $SRS_AUTO_HEADERS_H

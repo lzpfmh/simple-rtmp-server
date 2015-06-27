@@ -35,12 +35,14 @@ using namespace std;
 #include <srs_kernel_log.hpp>
 #include <srs_protocol_utility.hpp>
 #include <srs_core_autofree.hpp>
-#include <srs_protocol_rtmp_stack.hpp>
+#include <srs_protocol_stack.hpp>
 #include <srs_kernel_utility.hpp>
 #include <srs_kernel_stream.hpp>
 #include <srs_protocol_amf0.hpp>
 #include <srs_kernel_flv.hpp>
 #include <srs_kernel_codec.hpp>
+#include <srs_kernel_file.hpp>
+#include <srs_lib_bandwidth.hpp>
 
 // if user want to define log, define the folowing macro.
 #ifndef SRS_RTMP_USER_DEFINED_LOG
@@ -62,6 +64,7 @@ struct Context
     std::string vhost;
     std::string app;
     std::string stream;
+    std::string param;
     
     SrsRtmpClient* rtmp;
     SimpleSocketStream* skt;
@@ -90,39 +93,11 @@ int srs_librtmp_context_parse_uri(Context* context)
         context->stream = uri.substr(pos + 1);
         context->tcUrl = uri = uri.substr(0, pos);
     }
-    // schema
-    if ((pos = uri.find("rtmp://")) != string::npos) {
-        uri = uri.substr(pos + 7);
-    }
-    // host/vhost/port
-    if ((pos = uri.find(":")) != string::npos) {
-        context->vhost = context->host = uri.substr(0, pos);
-        uri = uri.substr(pos + 1);
-        
-        if ((pos = uri.find("/")) != string::npos) {
-            context->port = uri.substr(0, pos);
-            uri = uri.substr(pos + 1);
-        }
-    } else {
-        if ((pos = uri.find("/")) != string::npos) {
-            context->vhost = context->host = uri.substr(0, pos);
-            uri = uri.substr(pos + 1);
-        }
-        context->port = RTMP_DEFAULT_PORT;
-    }
-    // app
-    context->app = uri;
-    // query of app
-    if ((pos = uri.find("?")) != string::npos) {
-        context->app = uri.substr(0, pos);
-        string query = uri.substr(pos + 1);
-        if ((pos = query.find("vhost=")) != string::npos) {
-            context->vhost = query.substr(pos + 6);
-            if ((pos = context->vhost.find("&")) != string::npos) {
-                context->vhost = context->vhost.substr(pos);
-            }
-        }
-    }
+    
+    std::string schema;
+    srs_discovery_tc_url(context->tcUrl, 
+        schema, context->host, context->vhost, context->app, context->port,
+        context->param);
     
     return ret;
 }
@@ -172,6 +147,18 @@ srs_rtmp_t srs_rtmp_create(const char* url)
 {
     Context* context = new Context();
     context->url = url;
+    return context;
+}
+
+srs_rtmp_t srs_rtmp_create2(const char* url)
+{
+    Context* context = new Context();
+    
+    // use url as tcUrl.
+    context->url = url;
+    // auto append stream.
+    context->url += "/livestream";
+    
     return context;
 }
 
@@ -262,21 +249,55 @@ int srs_connect_app(srs_rtmp_t rtmp)
     srs_assert(rtmp != NULL);
     Context* context = (Context*)rtmp;
     
-    string tcUrl = "rtmp://";
-    // TODO: FIXME: extrace shared method
-    if (context->vhost == RTMP_VHOST_DEFAULT) {
-        tcUrl += context->ip;
-    } else {
-        tcUrl += context->vhost;
-    }
-    tcUrl += ":";
-    tcUrl += context->port;
-    tcUrl += "/";
-    tcUrl += context->app;
+    string tcUrl = srs_generate_tc_url(
+        context->ip, context->vhost, context->app, context->port,
+        context->param
+    );
     
-    if ((ret = context->rtmp->connect_app(context->app, tcUrl)) != ERROR_SUCCESS) {
+    if ((ret = context->rtmp->connect_app(
+        context->app, tcUrl, NULL, true)) != ERROR_SUCCESS) 
+    {
         return ret;
     }
+    
+    return ret;
+}
+
+int srs_connect_app2(srs_rtmp_t rtmp,
+    char srs_server_ip[128],char srs_server[128], 
+    char srs_primary[128], char srs_authors[128], 
+    char srs_version[32], int* srs_id, int* srs_pid
+) {
+    srs_server_ip[0] = 0;
+    srs_server[0] = 0;
+    srs_primary[0] = 0;
+    srs_authors[0] = 0;
+    srs_version[0] = 0;
+    *srs_id = 0;
+    *srs_pid = 0;
+
+    int ret = ERROR_SUCCESS;
+    
+    srs_assert(rtmp != NULL);
+    Context* context = (Context*)rtmp;
+    
+    string tcUrl = srs_generate_tc_url(
+        context->ip, context->vhost, context->app, context->port,
+        context->param
+    );
+    
+    std::string sip, sserver, sprimary, sauthors, sversion;
+    
+    if ((ret = context->rtmp->connect_app2(context->app, tcUrl, NULL, true,
+        sip, sserver, sprimary, sauthors, sversion, *srs_id, *srs_pid)) != ERROR_SUCCESS) {
+        return ret;
+    }
+    
+    snprintf(srs_server_ip, 128, "%s", sip.c_str());
+    snprintf(srs_server, 128, "%s", sserver.c_str());
+    snprintf(srs_primary, 128, "%s", sprimary.c_str());
+    snprintf(srs_authors, 128, "%s", sauthors.c_str());
+    snprintf(srs_version, 32, "%s", sversion.c_str());
     
     return ret;
 }
@@ -327,6 +348,42 @@ const char* srs_type2string(int type)
     }
     
     return unknown;
+}
+
+int srs_bandwidth_check(srs_rtmp_t rtmp, 
+    int64_t* start_time, int64_t* end_time, 
+    int* play_kbps, int* publish_kbps,
+    int* play_bytes, int* publish_bytes,
+    int* play_duration, int* publish_duration
+) {
+    *start_time = 0;
+    *end_time = 0;
+    *play_kbps = 0;
+    *publish_kbps = 0;
+    *play_bytes = 0;
+    *publish_bytes = 0;
+    *play_duration = 0;
+    *publish_duration = 0;
+    
+    int ret = ERROR_SUCCESS;
+    
+    srs_assert(rtmp != NULL);
+    Context* context = (Context*)rtmp;
+    
+    SrsBandwidthClient client;
+
+    if ((ret = client.initialize(context->rtmp)) != ERROR_SUCCESS) {
+        return ret;
+    }
+    
+    if ((ret = client.bandwidth_check(
+        start_time, end_time, play_kbps, publish_kbps,
+        play_bytes, publish_bytes, play_duration, publish_duration)) != ERROR_SUCCESS
+    ) {
+        return ret;
+    }
+    
+    return ret;
 }
 
 int srs_read_packet(srs_rtmp_t rtmp, int* type, u_int32_t* timestamp, char** data, int* size)
@@ -398,7 +455,7 @@ int srs_write_packet(srs_rtmp_t rtmp, int type, u_int32_t timestamp, char* data,
         header.initialize_audio(size, timestamp, context->stream_id);
         
         msg = new SrsSharedPtrMessage();
-        if ((ret = msg->initialize(&header, data, size)) != ERROR_SUCCESS) {
+        if ((ret = msg->create(&header, data, size)) != ERROR_SUCCESS) {
             srs_freep(data);
             return ret;
         }
@@ -407,7 +464,7 @@ int srs_write_packet(srs_rtmp_t rtmp, int type, u_int32_t timestamp, char* data,
         header.initialize_video(size, timestamp, context->stream_id);
         
         msg = new SrsSharedPtrMessage();
-        if ((ret = msg->initialize(&header, data, size)) != ERROR_SUCCESS) {
+        if ((ret = msg->create(&header, data, size)) != ERROR_SUCCESS) {
             srs_freep(data);
             return ret;
         }
@@ -416,7 +473,7 @@ int srs_write_packet(srs_rtmp_t rtmp, int type, u_int32_t timestamp, char* data,
         header.initialize_amf0_script(size, context->stream_id);
         
         msg = new SrsSharedPtrMessage();
-        if ((ret = msg->initialize(&header, data, size)) != ERROR_SUCCESS) {
+        if ((ret = msg->create(&header, data, size)) != ERROR_SUCCESS) {
             srs_freep(data);
             return ret;
         }
@@ -437,17 +494,17 @@ int srs_write_packet(srs_rtmp_t rtmp, int type, u_int32_t timestamp, char* data,
 
 int srs_version_major()
 {
-    return ::atoi(VERSION_MAJOR);
+    return VERSION_MAJOR;
 }
 
 int srs_version_minor()
 {
-    return ::atoi(VERSION_MINOR);
+    return VERSION_MINOR;
 }
 
 int srs_version_revision()
 {
-    return ::atoi(VERSION_REVISION);
+    return VERSION_REVISION;
 }
 
 int64_t srs_get_time_ms()
@@ -472,7 +529,8 @@ int64_t srs_get_nrecv_bytes(srs_rtmp_t rtmp)
 
 struct FlvContext
 {
-    SrsFileStream fs;
+    SrsFileReader reader;
+    SrsFileWriter writer;
     SrsFlvEncoder enc;
     SrsFlvDecoder dec;
 };
@@ -483,17 +541,12 @@ srs_flv_t srs_flv_open_read(const char* file)
     
     FlvContext* flv = new FlvContext();
     
-    if ((ret = flv->fs.open_read(file)) != ERROR_SUCCESS) {
+    if ((ret = flv->reader.open(file)) != ERROR_SUCCESS) {
         srs_freep(flv);
         return NULL;
     }
     
-    if ((ret = flv->enc.initialize(&flv->fs)) != ERROR_SUCCESS) {
-        srs_freep(flv);
-        return NULL;
-    }
-    
-    if ((ret = flv->dec.initialize(&flv->fs)) != ERROR_SUCCESS) {
+    if ((ret = flv->dec.initialize(&flv->reader)) != ERROR_SUCCESS) {
         srs_freep(flv);
         return NULL;
     }
@@ -507,17 +560,12 @@ srs_flv_t srs_flv_open_write(const char* file)
     
     FlvContext* flv = new FlvContext();
     
-    if ((ret = flv->fs.open_write(file)) != ERROR_SUCCESS) {
+    if ((ret = flv->writer.open(file)) != ERROR_SUCCESS) {
         srs_freep(flv);
         return NULL;
     }
     
-    if ((ret = flv->enc.initialize(&flv->fs)) != ERROR_SUCCESS) {
-        srs_freep(flv);
-        return NULL;
-    }
-    
-    if ((ret = flv->dec.initialize(&flv->fs)) != ERROR_SUCCESS) {
+    if ((ret = flv->enc.initialize(&flv->writer)) != ERROR_SUCCESS) {
         srs_freep(flv);
         return NULL;
     }
@@ -536,6 +584,11 @@ int srs_flv_read_header(srs_flv_t flv, char header[9])
     int ret = ERROR_SUCCESS;
     
     FlvContext* context = (FlvContext*)flv;
+
+    if (!context->reader.is_open()) {
+        return ERROR_SYSTEM_IO_INVALID;
+    }
+    
     if ((ret = context->dec.read_header(header)) != ERROR_SUCCESS) {
         return ret;
     }
@@ -553,6 +606,11 @@ int srs_flv_read_tag_header(srs_flv_t flv, char* ptype, int32_t* pdata_size, u_i
     int ret = ERROR_SUCCESS;
     
     FlvContext* context = (FlvContext*)flv;
+
+    if (!context->reader.is_open()) {
+        return ERROR_SYSTEM_IO_INVALID;
+    }
+    
     if ((ret = context->dec.read_tag_header(ptype, pdata_size, ptime)) != ERROR_SUCCESS) {
         return ret;
     }
@@ -565,6 +623,11 @@ int srs_flv_read_tag_data(srs_flv_t flv, char* data, int32_t size)
     int ret = ERROR_SUCCESS;
     
     FlvContext* context = (FlvContext*)flv;
+
+    if (!context->reader.is_open()) {
+        return ERROR_SYSTEM_IO_INVALID;
+    }
+    
     if ((ret = context->dec.read_tag_data(data, size)) != ERROR_SUCCESS) {
         return ret;
     }
@@ -582,6 +645,11 @@ int srs_flv_write_header(srs_flv_t flv, char header[9])
     int ret = ERROR_SUCCESS;
     
     FlvContext* context = (FlvContext*)flv;
+
+    if (!context->writer.is_open()) {
+        return ERROR_SYSTEM_IO_INVALID;
+    }
+    
     if ((ret = context->enc.write_header(header)) != ERROR_SUCCESS) {
         return ret;
     }
@@ -594,6 +662,11 @@ int srs_flv_write_tag(srs_flv_t flv, char type, int32_t time, char* data, int si
     int ret = ERROR_SUCCESS;
     
     FlvContext* context = (FlvContext*)flv;
+
+    if (!context->writer.is_open()) {
+        return ERROR_SYSTEM_IO_INVALID;
+    }
+    
     if (type == SRS_RTMP_TYPE_AUDIO) {
         return context->enc.write_audio(time, data, size);
     } else if (type == SRS_RTMP_TYPE_VIDEO) {
@@ -613,13 +686,13 @@ int srs_flv_size_tag(int data_size)
 int64_t srs_flv_tellg(srs_flv_t flv)
 {
     FlvContext* context = (FlvContext*)flv;
-    return context->fs.tellg();
+    return context->reader.tellg();
 }
 
 void srs_flv_lseek(srs_flv_t flv, int64_t offset)
 {
     FlvContext* context = (FlvContext*)flv;
-    context->fs.lseek(offset);
+    context->reader.lseek(offset);
 }
 
 flv_bool srs_flv_is_eof(int error_code)
@@ -629,12 +702,12 @@ flv_bool srs_flv_is_eof(int error_code)
 
 flv_bool srs_flv_is_sequence_header(char* data, int32_t size)
 {
-    return SrsFlvCodec::video_is_sequence_header((int8_t*)data, (int)size);
+    return SrsFlvCodec::video_is_sequence_header(data, (int)size);
 }
 
 flv_bool srs_flv_is_keyframe(char* data, int32_t size)
 {
-    return SrsFlvCodec::video_is_keyframe((int8_t*)data, (int)size);
+    return SrsFlvCodec::video_is_keyframe(data, (int)size);
 }
 
 srs_amf0_t srs_amf0_parse(char* data, int size, int* nparsed)
@@ -653,7 +726,7 @@ srs_amf0_t srs_amf0_parse(char* data, int size, int* nparsed)
         return amf0;
     }
     
-    stream.reset();
+    stream.skip(-1 * stream.pos());
     if ((ret = any->read(&stream)) != ERROR_SUCCESS) {
         srs_freep(any);
         return amf0;
@@ -915,96 +988,18 @@ void srs_amf0_strict_array_append(srs_amf0_t amf0, srs_amf0_t value)
     obj->append(any);
 }
 
-void __srs_fill_level_spaces(stringstream& ss, int level)
-{
-    for (int i = 0; i < level; i++) {
-        ss << "    ";
-    }
-}
-void __srs_amf0_do_print(SrsAmf0Any* any, stringstream& ss, int level)
-{
-    if (any->is_boolean()) {
-        ss << "Boolean " << (any->to_boolean()? "true":"false") << endl;
-    } else if (any->is_number()) {
-        ss << "Number " << std::fixed << any->to_number() << endl;
-    } else if (any->is_string()) {
-        ss << "String " << any->to_str() << endl;
-    } else if (any->is_null()) {
-        ss << "Null" << endl;
-    } else if (any->is_ecma_array()) {
-        SrsAmf0EcmaArray* obj = any->to_ecma_array();
-        ss << "EcmaArray " << "(" << obj->count() << " items)" << endl;
-        for (int i = 0; i < obj->count(); i++) {
-            __srs_fill_level_spaces(ss, level + 1);
-            ss << "Elem '" << obj->key_at(i) << "' ";
-            if (obj->value_at(i)->is_complex_object()) {
-                __srs_amf0_do_print(obj->value_at(i), ss, level + 1);
-            } else {
-                __srs_amf0_do_print(obj->value_at(i), ss, 0);
-            }
-        }
-    } else if (any->is_strict_array()) {
-        SrsAmf0StrictArray* obj = any->to_strict_array();
-        ss << "StrictArray " << "(" << obj->count() << " items)" << endl;
-        for (int i = 0; i < obj->count(); i++) {
-            __srs_fill_level_spaces(ss, level + 1);
-            ss << "Elem ";
-            if (obj->at(i)->is_complex_object()) {
-                __srs_amf0_do_print(obj->at(i), ss, level + 1);
-            } else {
-                __srs_amf0_do_print(obj->at(i), ss, 0);
-            }
-        }
-    } else if (any->is_object()) {
-        SrsAmf0Object* obj = any->to_object();
-        ss << "Object " << "(" << obj->count() << " items)" << endl;
-        for (int i = 0; i < obj->count(); i++) {
-            __srs_fill_level_spaces(ss, level + 1);
-            ss << "Property '" << obj->key_at(i) << "' ";
-            if (obj->value_at(i)->is_complex_object()) {
-                __srs_amf0_do_print(obj->value_at(i), ss, level + 1);
-            } else {
-                __srs_amf0_do_print(obj->value_at(i), ss, 0);
-            }
-        }
-    } else {
-        ss << "Unknown" << endl;
-    }
-}
-
 char* srs_amf0_human_print(srs_amf0_t amf0, char** pdata, int* psize)
 {
     if (!amf0) {
         return NULL;
     }
     
-    stringstream ss;
-    
-    ss.precision(1);
-    
     SrsAmf0Any* any = (SrsAmf0Any*)amf0;
     
-    __srs_amf0_do_print(any, ss, 0);
-    
-    string str = ss.str();
-    if (str.empty()) {
-        return NULL;
-    }
-    
-    char* data = new char[str.length() + 1];
-    memcpy(data, str.data(), str.length());
-    data[str.length()] = 0;
-    
-    if (pdata) {
-        *pdata = data;
-    }
-    if (psize) {
-        *psize = str.length();
-    }
-    
-    return data;
+    return any->human_print(pdata, psize);
 }
 
 #ifdef __cplusplus
 }
 #endif
+

@@ -23,6 +23,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <srs_app_config.hpp>
 
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -41,106 +42,23 @@ using namespace std;
 #include <srs_kernel_log.hpp>
 #include <srs_protocol_utility.hpp>
 #include <srs_core_autofree.hpp>
+#include <srs_app_source.hpp>
+#include <srs_kernel_file.hpp>
+#include <srs_app_utility.hpp>
 
-#define SRS_WIKI_URL_LOG "https://github.com/winlinvip/simple-rtmp-server/wiki/SrsLog"
+using namespace _srs_internal;
 
-#define FILE_OFFSET(fd) lseek(fd, 0, SEEK_CUR)
+#define SRS_WIKI_URL_LOG "https://github.com/simple-rtmp-server/srs/wiki/v1_CN_SrsLog"
 
-int64_t FILE_SIZE(int fd)
-{
-    int64_t pre = FILE_OFFSET(fd);
-    int64_t pos = lseek(fd, 0, SEEK_END);
-    lseek(fd, pre, SEEK_SET);
-    return pos;
-}
+// '\n'
+#define __LF (char)0x0a
 
-#define LF (char)0x0a
-#define CR (char)0x0d
+// '\r'
+#define __CR (char)0x0d
 
 bool is_common_space(char ch)
 {
-    return (ch == ' ' || ch == '\t' || ch == CR || ch == LF);
-}
-
-class SrsFileBuffer
-{
-private:
-    // last available position.
-    char* last;
-    // end of buffer.
-    char* end;
-    // start of buffer.
-    char* start;
-public:
-    // current consumed position.
-    char* pos;
-    // current parsed line.
-    int line;
-    
-    SrsFileBuffer();
-    virtual ~SrsFileBuffer();
-    virtual int fullfill(const char* filename);
-    virtual bool empty();
-};
-
-SrsFileBuffer::SrsFileBuffer()
-{
-    line = 0;
-
-    pos = last = start = NULL;
-    end = start;
-}
-
-SrsFileBuffer::~SrsFileBuffer()
-{
-    srs_freep(start);
-}
-
-int SrsFileBuffer::fullfill(const char* filename)
-{
-    int ret = ERROR_SUCCESS;
-    
-    int fd = -1;
-    int nread = 0;
-    int filesize = 0;
-    
-    // TODO: FIXME: refine the file stream.
-    if ((fd = ::open(filename, O_RDONLY, 0)) < 0) {
-        ret = ERROR_SYSTEM_CONFIG_INVALID;
-        srs_error("open conf file error. ret=%d", ret);
-        goto finish;
-    }
-    
-    if ((filesize = FILE_SIZE(fd) - FILE_OFFSET(fd)) <= 0) {
-        ret = ERROR_SYSTEM_CONFIG_EOF;
-        srs_error("read conf file error. ret=%d", ret);
-        goto finish;
-    }
-
-    srs_freep(start);
-    pos = last = start = new char[filesize];
-    end = start + filesize;
-    
-    if ((nread = read(fd, start, filesize)) != filesize) {
-        ret = ERROR_SYSTEM_CONFIG_INVALID;
-        srs_error("read file read error. expect %d, actual %d bytes, ret=%d", 
-            filesize, nread, ret);
-        goto finish;
-    }
-    
-    line = 1;
-    
-finish:
-    if (fd > 0) {
-        ::close(fd);
-    }
-    
-    return ret;
-}
-
-bool SrsFileBuffer::empty()
-{
-    return pos >= end;
+    return (ch == ' ' || ch == '\t' || ch == __CR || ch == __LF);
 }
 
 SrsConfDirective::SrsConfDirective()
@@ -184,16 +102,9 @@ string SrsConfDirective::arg2()
     return "";
 }
 
-void SrsConfDirective::set_arg0(string value)
-{
-    if (args.size() > 0) {
-        args[0] = value;
-    }
-    args.push_back(value);
-}
-
 SrsConfDirective* SrsConfDirective::at(int index)
 {
+    srs_assert(index < (int)directives.size());
     return directives.at(index);
 }
 
@@ -223,63 +134,62 @@ SrsConfDirective* SrsConfDirective::get(string _name, string _arg0)
     return NULL;
 }
 
-int SrsConfDirective::parse(const char* filename)
+bool SrsConfDirective::is_vhost()
 {
-    int ret = ERROR_SUCCESS;
-    
-    SrsFileBuffer buffer;
-    
-    if ((ret = buffer.fullfill(filename)) != ERROR_SUCCESS) {
-        return ret;
-    }
-    
-    return parse_conf(&buffer, parse_file);
+    return name == "vhost";
+}
+
+int SrsConfDirective::parse(SrsConfigBuffer* buffer)
+{
+    return parse_conf(buffer, parse_file);
 }
 
 // see: ngx_conf_parse
-int SrsConfDirective::parse_conf(SrsFileBuffer* buffer, SrsDirectiveType type)
+int SrsConfDirective::parse_conf(SrsConfigBuffer* buffer, SrsDirectiveType type)
 {
     int ret = ERROR_SUCCESS;
     
     while (true) {
         std::vector<string> args;
-        ret = read_token(buffer, args);
+        int line_start = 0;
+        ret = read_token(buffer, args, line_start);
         
         /**
         * ret maybe:
-        * ERROR_SYSTEM_CONFIG_INVALID         error.
-        * ERROR_SYSTEM_CONFIG_DIRECTIVE        directive terminated by ';' found
-        * ERROR_SYSTEM_CONFIG_BLOCK_START    token terminated by '{' found
-        * ERROR_SYSTEM_CONFIG_BLOCK_END        the '}' found
-        * ERROR_SYSTEM_CONFIG_EOF            the config file is done
+        * ERROR_SYSTEM_CONFIG_INVALID           error.
+        * ERROR_SYSTEM_CONFIG_DIRECTIVE         directive terminated by ';' found
+        * ERROR_SYSTEM_CONFIG_BLOCK_START       token terminated by '{' found
+        * ERROR_SYSTEM_CONFIG_BLOCK_END         the '}' found
+        * ERROR_SYSTEM_CONFIG_EOF               the config file is done
         */
         if (ret == ERROR_SYSTEM_CONFIG_INVALID) {
             return ret;
         }
         if (ret == ERROR_SYSTEM_CONFIG_BLOCK_END) {
             if (type != parse_block) {
-                srs_error("line %d: unexpected \"}\"", buffer->line);
+                srs_error("line %d: unexpected \"}\", ret=%d", buffer->line, ret);
                 return ret;
             }
             return ERROR_SUCCESS;
         }
         if (ret == ERROR_SYSTEM_CONFIG_EOF) {
             if (type == parse_block) {
-                srs_error("line %d: unexpected end of file, expecting \"}\"", buffer->line);
+                srs_error("line %d: unexpected end of file, expecting \"}\", ret=%d", conf_line, ret);
                 return ret;
             }
             return ERROR_SUCCESS;
         }
         
         if (args.empty()) {
-            srs_error("line %d: empty directive.", buffer->line);
+            ret = ERROR_SYSTEM_CONFIG_INVALID;
+            srs_error("line %d: empty directive. ret=%d", conf_line, ret);
             return ret;
         }
         
         // build directive tree.
         SrsConfDirective* directive = new SrsConfDirective();
 
-        directive->conf_line = buffer->line;
+        directive->conf_line = line_start;
         directive->name = args[0];
         args.erase(args.begin());
         directive->args.swap(args);
@@ -297,7 +207,7 @@ int SrsConfDirective::parse_conf(SrsFileBuffer* buffer, SrsDirectiveType type)
 }
 
 // see: ngx_conf_read_token
-int SrsConfDirective::read_token(SrsFileBuffer* buffer, vector<string>& args)
+int SrsConfDirective::read_token(SrsConfigBuffer* buffer, vector<string>& args, int& line_start)
 {
     int ret = ERROR_SUCCESS;
 
@@ -326,7 +236,7 @@ int SrsConfDirective::read_token(SrsFileBuffer* buffer, vector<string>& args)
         
         char ch = *buffer->pos++;
         
-        if (ch == LF) {
+        if (ch == __LF) {
             buffer->line++;
             sharp_comment = false;
         }
@@ -395,6 +305,10 @@ int SrsConfDirective::read_token(SrsFileBuffer* buffer, vector<string>& args)
             }
         } else {
         // last charecter is not space
+            if (line_start == 0) {
+                line_start = buffer->line;
+            }
+            
             bool found = false;
             if (d_quoted) {
                 if (ch == '"') {
@@ -436,11 +350,6 @@ int SrsConfDirective::read_token(SrsFileBuffer* buffer, vector<string>& args)
     }
     
     return ret;
-}
-
-bool SrsConfDirective::is_vhost()
-{
-    return name == "vhost";
 }
 
 SrsConfig::SrsConfig()
@@ -488,18 +397,32 @@ int SrsConfig::reload()
     int ret = ERROR_SUCCESS;
 
     SrsConfig conf;
+
     if ((ret = conf.parse_file(config_file.c_str())) != ERROR_SUCCESS) {
         srs_error("ignore config reloader parse file failed. ret=%d", ret);
         ret = ERROR_SUCCESS;
         return ret;
     }
     srs_info("config reloader parse file success.");
+
+    if ((ret = conf.check_config()) != ERROR_SUCCESS) {
+        srs_error("ignore config reloader check config failed. ret=%d", ret);
+        ret = ERROR_SUCCESS;
+        return ret;
+    }
+    
+    return reload_conf(&conf);
+}
+
+int SrsConfig::reload_conf(SrsConfig* conf)
+{
+    int ret = ERROR_SUCCESS;
     
     SrsConfDirective* old_root = root;
     SrsAutoFree(SrsConfDirective, old_root);
     
-    root = conf.root;
-    conf.root = NULL;
+    root = conf->root;
+    conf->root = NULL;
     
     // merge config.
     std::vector<ISrsReloadHandler*>::iterator it;
@@ -509,7 +432,8 @@ int SrsConfig::reload()
     //
     // always support reload without additional code:
     //      chunk_size, ff_log_dir, max_connections,
-    //      bandcheck, http_hooks, heartbeat
+    //      bandcheck, http_hooks, heartbeat, 
+    //      token_traverse, debug_srs_upnode
 
     // merge config: listen
     if (!srs_directive_equals(root->get("listen"), old_root->get("listen"))) {
@@ -537,23 +461,38 @@ int SrsConfig::reload()
     
     // merge config: srs_log_tank
     if (!srs_directive_equals(root->get("srs_log_tank"), old_root->get("srs_log_tank"))) {
-        if ((ret = force_reload_log_tank()) != ERROR_SUCCESS) {
-            return ret;
+        for (it = subscribes.begin(); it != subscribes.end(); ++it) {
+            ISrsReloadHandler* subscribe = *it;
+            if ((ret = subscribe->on_reload_log_tank()) != ERROR_SUCCESS) {
+                srs_error("notify subscribes reload srs_log_tank failed. ret=%d", ret);
+                return ret;
+            }
         }
+        srs_trace("reload srs_log_tank success.");
     }
     
     // merge config: srs_log_level
     if (!srs_directive_equals(root->get("srs_log_level"), old_root->get("srs_log_level"))) {
-        if ((ret = force_reload_log_level()) != ERROR_SUCCESS) {
-            return ret;
+        for (it = subscribes.begin(); it != subscribes.end(); ++it) {
+            ISrsReloadHandler* subscribe = *it;
+            if ((ret = subscribe->on_reload_log_level()) != ERROR_SUCCESS) {
+                srs_error("notify subscribes reload srs_log_level failed. ret=%d", ret);
+                return ret;
+            }
         }
+        srs_trace("reload srs_log_level success.");
     }
     
     // merge config: srs_log_file
     if (!srs_directive_equals(root->get("srs_log_file"), old_root->get("srs_log_file"))) {
-        if ((ret = force_reload_log_file()) != ERROR_SUCCESS) {
-            return ret;
+        for (it = subscribes.begin(); it != subscribes.end(); ++it) {
+            ISrsReloadHandler* subscribe = *it;
+            if ((ret = subscribe->on_reload_log_file()) != ERROR_SUCCESS) {
+                srs_error("notify subscribes reload srs_log_file failed. ret=%d", ret);
+                return ret;
+            }
         }
+        srs_trace("reload srs_log_file success.");
     }
     
     // merge config: pithy_print
@@ -582,117 +521,6 @@ int SrsConfig::reload()
     if ((ret = reload_vhost(old_root)) != ERROR_SUCCESS) {
         return ret;
     }
-    
-    return ret;
-}
-
-SrsConfDirective* SrsConfig::get_or_create(SrsConfDirective* node, string name)
-{
-    srs_assert(node);
-    
-    SrsConfDirective* conf = node->get(name);
-    
-    if (!conf) {
-        conf = new SrsConfDirective();
-        conf->name = name;
-        node->directives.push_back(conf);
-    }
-    
-    return conf;
-}
-
-bool SrsConfig::set_log_file(string file)
-{
-    if (file == get_log_file()) {
-        return false;
-    }
-    
-    SrsConfDirective* conf = get_or_create(root, "srs_log_file");
-    srs_assert(conf);
-    conf->set_arg0(file);
-    
-    return true;
-}
-
-bool SrsConfig::set_log_tank(string tank)
-{
-    if (get_log_tank_file() && tank != "console") {
-        return false;
-    }
-    if (!get_log_tank_file() && tank == "console") {
-        return false;
-    }
-    
-    SrsConfDirective* conf = get_or_create(root, "srs_log_tank");
-    srs_assert(conf);
-    conf->set_arg0(tank);
-    
-    return true;
-}
-
-bool SrsConfig::set_log_level(string level)
-{
-    if (level == get_log_level()) {
-        return false;
-    }
-    
-    SrsConfDirective* conf = get_or_create(root, "srs_log_level");
-    srs_assert(conf);
-    conf->set_arg0(level);
-    
-    return true;
-}
-
-int SrsConfig::force_reload_log_file()
-{
-    int ret = ERROR_SUCCESS;
-    
-    std::vector<ISrsReloadHandler*>::iterator it;
-    
-    for (it = subscribes.begin(); it != subscribes.end(); ++it) {
-        ISrsReloadHandler* subscribe = *it;
-        if ((ret = subscribe->on_reload_log_file()) != ERROR_SUCCESS) {
-            srs_error("notify subscribes reload srs_log_file failed. ret=%d", ret);
-            return ret;
-        }
-    }
-    srs_trace("reload srs_log_file success.");
-    
-    return ret;
-}
-
-int SrsConfig::force_reload_log_tank()
-{
-    int ret = ERROR_SUCCESS;
-    
-    std::vector<ISrsReloadHandler*>::iterator it;
-    
-    for (it = subscribes.begin(); it != subscribes.end(); ++it) {
-        ISrsReloadHandler* subscribe = *it;
-        if ((ret = subscribe->on_reload_log_tank()) != ERROR_SUCCESS) {
-            srs_error("notify subscribes reload srs_log_tank failed. ret=%d", ret);
-            return ret;
-        }
-    }
-    srs_trace("reload srs_log_tank success.");
-    
-    return ret;
-}
-
-int SrsConfig::force_reload_log_level()
-{
-    int ret = ERROR_SUCCESS;
-    
-    std::vector<ISrsReloadHandler*>::iterator it;
-    
-    for (it = subscribes.begin(); it != subscribes.end(); ++it) {
-        ISrsReloadHandler* subscribe = *it;
-        if ((ret = subscribe->on_reload_log_level()) != ERROR_SUCCESS) {
-            srs_error("notify subscribes reload srs_log_level failed. ret=%d", ret);
-            return ret;
-        }
-    }
-    srs_trace("reload srs_log_level success.");
     
     return ret;
 }
@@ -946,6 +774,17 @@ int SrsConfig::reload_vhost(SrsConfDirective* old_root)
                 }
                 srs_trace("vhost %s reload queue_length success.", vhost.c_str());
             }
+            // time_jitter, only one per vhost
+            if (!srs_directive_equals(new_vhost->get("time_jitter"), old_vhost->get("time_jitter"))) {
+                for (it = subscribes.begin(); it != subscribes.end(); ++it) {
+                    ISrsReloadHandler* subscribe = *it;
+                    if ((ret = subscribe->on_reload_vhost_time_jitter(vhost)) != ERROR_SUCCESS) {
+                        srs_error("vhost %s notify subscribes time_jitter failed. ret=%d", vhost.c_str(), ret);
+                        return ret;
+                    }
+                }
+                srs_trace("vhost %s reload time_jitter success.", vhost.c_str());
+            }
             // forward, only one per vhost
             if (!srs_directive_equals(new_vhost->get("forward"), old_vhost->get("forward"))) {
                 for (it = subscribes.begin(); it != subscribes.end(); ++it) {
@@ -958,6 +797,7 @@ int SrsConfig::reload_vhost(SrsConfDirective* old_root)
                 srs_trace("vhost %s reload forward success.", vhost.c_str());
             }
             // hls, only one per vhost
+            // @remark, the hls_on_error directly support reload.
             if (!srs_directive_equals(new_vhost->get("hls"), old_vhost->get("hls"))) {
                 for (it = subscribes.begin(); it != subscribes.end(); ++it) {
                     ISrsReloadHandler* subscribe = *it;
@@ -1119,44 +959,41 @@ int SrsConfig::reload_ingest(SrsConfDirective* new_vhost, SrsConfDirective* old_
     for (int i = 0; i < (int)old_ingesters.size(); i++) {
         SrsConfDirective* old_ingester = old_ingesters.at(i);
         std::string ingest_id = old_ingester->arg0();
+        SrsConfDirective* new_ingester = new_vhost->get("ingest", ingest_id);
         
-        // if ingester exists in new vhost, not removed, ignore.
-        if (new_vhost->get("ingest", ingest_id)) {
-            continue;
-        }
-
-        // notice handler ingester removed.
-        for (it = subscribes.begin(); it != subscribes.end(); ++it) {
-            ISrsReloadHandler* subscribe = *it;
-            if ((ret = subscribe->on_reload_ingest_removed(vhost, ingest_id)) != ERROR_SUCCESS) {
-                srs_error("vhost %s notify subscribes ingest=%s removed failed. ret=%d", 
-                    vhost.c_str(), ingest_id.c_str(), ret);
-                return ret;
+        // ENABLED => DISABLED
+        if (get_ingest_enabled(old_ingester) && !get_ingest_enabled(new_ingester)) {
+            // notice handler ingester removed.
+            for (it = subscribes.begin(); it != subscribes.end(); ++it) {
+                ISrsReloadHandler* subscribe = *it;
+                if ((ret = subscribe->on_reload_ingest_removed(vhost, ingest_id)) != ERROR_SUCCESS) {
+                    srs_error("vhost %s notify subscribes ingest=%s removed failed. ret=%d", 
+                        vhost.c_str(), ingest_id.c_str(), ret);
+                    return ret;
+                }
             }
+            srs_trace("vhost %s reload ingest=%s removed success.", vhost.c_str(), ingest_id.c_str());
         }
-        srs_trace("vhost %s reload ingest=%s removed success.", vhost.c_str(), ingest_id.c_str());
     }
     
     // for added ingesters, start them.
     for (int i = 0; i < (int)new_ingesters.size(); i++) {
         SrsConfDirective* new_ingester = new_ingesters.at(i);
         std::string ingest_id = new_ingester->arg0();
+        SrsConfDirective* old_ingester = old_vhost->get("ingest", ingest_id);
         
-        // if ingester exists in old vhost, not added, ignore.
-        if (old_vhost->get("ingest", ingest_id)) {
-            continue;
-        }
-
-        // notice handler ingester removed.
-        for (it = subscribes.begin(); it != subscribes.end(); ++it) {
-            ISrsReloadHandler* subscribe = *it;
-            if ((ret = subscribe->on_reload_ingest_added(vhost, ingest_id)) != ERROR_SUCCESS) {
-                srs_error("vhost %s notify subscribes ingest=%s added failed. ret=%d", 
-                    vhost.c_str(), ingest_id.c_str(), ret);
-                return ret;
+        // DISABLED => ENABLED
+        if (!get_ingest_enabled(old_ingester) && get_ingest_enabled(new_ingester)) {
+            for (it = subscribes.begin(); it != subscribes.end(); ++it) {
+                ISrsReloadHandler* subscribe = *it;
+                if ((ret = subscribe->on_reload_ingest_added(vhost, ingest_id)) != ERROR_SUCCESS) {
+                    srs_error("vhost %s notify subscribes ingest=%s added failed. ret=%d", 
+                        vhost.c_str(), ingest_id.c_str(), ret);
+                    return ret;
+                }
             }
+            srs_trace("vhost %s reload ingest=%s added success.", vhost.c_str(), ingest_id.c_str());
         }
-        srs_trace("vhost %s reload ingest=%s added success.", vhost.c_str(), ingest_id.c_str());
     }
 
     // for updated ingesters, restart them.
@@ -1165,25 +1002,23 @@ int SrsConfig::reload_ingest(SrsConfDirective* new_vhost, SrsConfDirective* old_
         std::string ingest_id = new_ingester->arg0();
         SrsConfDirective* old_ingester = old_vhost->get("ingest", ingest_id);
         
-        // ignore the added ingester.
-        if (!old_ingester) {
-            continue;
-        }
-        
-        if (srs_directive_equals(new_ingester, old_ingester)) {
-            continue;
-        }
-
-        // notice handler ingester removed.
-        for (it = subscribes.begin(); it != subscribes.end(); ++it) {
-            ISrsReloadHandler* subscribe = *it;
-            if ((ret = subscribe->on_reload_ingest_updated(vhost, ingest_id)) != ERROR_SUCCESS) {
-                srs_error("vhost %s notify subscribes ingest=%s updated failed. ret=%d", 
-                    vhost.c_str(), ingest_id.c_str(), ret);
-                return ret;
+        // ENABLED => ENABLED
+        if (get_ingest_enabled(old_ingester) && get_ingest_enabled(new_ingester)) {
+            if (srs_directive_equals(new_ingester, old_ingester)) {
+                continue;
             }
+    
+            // notice handler ingester removed.
+            for (it = subscribes.begin(); it != subscribes.end(); ++it) {
+                ISrsReloadHandler* subscribe = *it;
+                if ((ret = subscribe->on_reload_ingest_updated(vhost, ingest_id)) != ERROR_SUCCESS) {
+                    srs_error("vhost %s notify subscribes ingest=%s updated failed. ret=%d", 
+                        vhost.c_str(), ingest_id.c_str(), ret);
+                    return ret;
+                }
+            }
+            srs_trace("vhost %s reload ingest=%s updated success.", vhost.c_str(), ingest_id.c_str());
         }
-        srs_trace("vhost %s reload ingest=%s updated success.", vhost.c_str(), ingest_id.c_str());
     }
 
     srs_trace("ingest not changed for vhost=%s", vhost.c_str());
@@ -1196,6 +1031,7 @@ int SrsConfig::parse_options(int argc, char** argv)
 {
     int ret = ERROR_SUCCESS;
     
+    // argv
     for (int i = 0; i < argc; i++) {
         _argv.append(argv[i]);
         
@@ -1204,10 +1040,12 @@ int SrsConfig::parse_options(int argc, char** argv)
         }
     }
     
+    // cwd
     char cwd[256];
     getcwd(cwd, sizeof(cwd));
     _cwd = cwd;
     
+    // config
     show_help = true;
     for (int i = 1; i < argc; i++) {
         if ((ret = parse_argv(i, argv)) != ERROR_SUCCESS) {
@@ -1234,6 +1072,12 @@ int SrsConfig::parse_options(int argc, char** argv)
     ret = parse_file(config_file.c_str());
     
     if (test_conf) {
+        // the parse_file never check the config,
+        // we check it when user requires check config file.
+        if (ret == ERROR_SUCCESS) {
+            ret = check_config();
+        }
+
         if (ret == ERROR_SUCCESS) {
             srs_trace("config file is ok");
             exit(0);
@@ -1242,55 +1086,32 @@ int SrsConfig::parse_options(int argc, char** argv)
             exit(ret);
         }
     }
+
+    ////////////////////////////////////////////////////////////////////////
+    // check log name and level
+    ////////////////////////////////////////////////////////////////////////
+    if (true) {
+        std::string log_filename = this->get_log_file();
+        if (get_log_tank_file() && log_filename.empty()) {
+            ret = ERROR_SYSTEM_CONFIG_INVALID;
+            srs_error("must specifies the file to write log to. ret=%d", ret);
+            return ret;
+        }
+        if (get_log_tank_file()) {
+            srs_trace("write log to file %s", log_filename.c_str());
+            srs_trace("you can: tailf %s", log_filename.c_str());
+            srs_trace("@see: %s", SRS_WIKI_URL_LOG);
+        } else {
+            srs_trace("write log to console");
+        }
+    }
     
     return ret;
 }
 
-int SrsConfig::parse_file(const char* filename)
+string SrsConfig::config()
 {
-    int ret = ERROR_SUCCESS;
-    
-    config_file = filename;
-    
-    if (config_file.empty()) {
-        return ERROR_SYSTEM_CONFIG_INVALID;
-    }
-    
-    if ((ret = root->parse(config_file.c_str())) != ERROR_SUCCESS) {
-        return ret;
-    }
-    
-    SrsConfDirective* conf = NULL;
-    // check rtmp port specified by directive listen.
-    if ((conf = get_listen()) == NULL || conf->args.size() == 0) {
-        ret = ERROR_SYSTEM_CONFIG_INVALID;
-        srs_error("line %d: conf error, "
-            "directive \"listen\" is empty, ret=%d", (conf? conf->conf_line:0), ret);
-        return ret;
-    }
-    
-    // TODO: check the hls.
-    // TODO: check forward.
-    // TODO: check ffmpeg.
-    // TODO: check http.
-    // TODO: check pid.
-    
-    // check log
-    std::string log_filename = this->get_log_file();
-    if (get_log_tank_file() && log_filename.empty()) {
-        ret = ERROR_SYSTEM_CONFIG_INVALID;
-        srs_error("must specifies the file to write log to. ret=%d", ret);
-        return ret;
-    }
-    if (get_log_tank_file()) {
-        srs_trace("write log to file %s", log_filename.c_str());
-        srs_trace("you can: tailf %s", log_filename.c_str());
-        srs_trace("@see: %s", SRS_WIKI_URL_LOG);
-    } else {
-        srs_trace("write log to console");
-    }
-    
-    return ret;
+    return config_file;
 }
 
 int SrsConfig::parse_argv(int& i, char** argv)
@@ -1346,9 +1167,11 @@ void SrsConfig::print_help(char** argv)
 {
     printf(
         RTMP_SIG_SRS_NAME" "RTMP_SIG_SRS_VERSION" "RTMP_SIG_SRS_COPYRIGHT"\n" 
-        "Primary Authors: "RTMP_SIG_SRS_PRIMARY_AUTHROS"\n"
+        "license: "RTMP_SIG_SRS_LICENSE"\n"
+        "Primary: "RTMP_SIG_SRS_PRIMARY"\n"
+        "Authors: "RTMP_SIG_SRS_AUTHROS"\n"
         "Build: "SRS_AUTO_BUILD_DATE" Configuration:"SRS_AUTO_USER_CONFIGURE"\n"
-        "Features:"SRS_AUTO_CONFIGURE"\n"
+        "Features:"SRS_AUTO_CONFIGURE"\n""\n"
         "Usage: %s [-h?vV] [[-t] -c <filename>]\n" 
         "\n"
         "Options:\n"
@@ -1363,9 +1186,476 @@ void SrsConfig::print_help(char** argv)
         "\n"
         "For example:\n"
         "   %s -v\n"
-        "   %s -t -c "SRS_DEFAULT_CONF"\n"
-        "   %s -c "SRS_DEFAULT_CONF"\n",
+        "   %s -t -c "SRS_CONF_DEFAULT_COFNIG_FILE"\n"
+        "   %s -c "SRS_CONF_DEFAULT_COFNIG_FILE"\n",
         argv[0], argv[0], argv[0], argv[0]);
+}
+
+int SrsConfig::parse_file(const char* filename)
+{
+    int ret = ERROR_SUCCESS;
+    
+    config_file = filename;
+    
+    if (config_file.empty()) {
+        return ERROR_SYSTEM_CONFIG_INVALID;
+    }
+    
+    SrsConfigBuffer buffer;
+    
+    if ((ret = buffer.fullfill(config_file.c_str())) != ERROR_SUCCESS) {
+        return ret;
+    }
+    
+    return parse_buffer(&buffer);
+}
+
+int SrsConfig::check_config()
+{
+    int ret = ERROR_SUCCESS;
+
+    srs_trace("srs checking config...");
+    
+    vector<SrsConfDirective*> vhosts = get_vhosts();
+
+    ////////////////////////////////////////////////////////////////////////
+    // check empty
+    ////////////////////////////////////////////////////////////////////////
+    if (root->directives.size() == 0) {
+        ret = ERROR_SYSTEM_CONFIG_INVALID;
+        srs_error("conf is empty, ret=%d", ret);
+        return ret;
+    }
+    
+    ////////////////////////////////////////////////////////////////////////
+    // check root directives.
+    ////////////////////////////////////////////////////////////////////////
+    for (int i = 0; i < (int)root->directives.size(); i++) {
+        SrsConfDirective* conf = root->at(i);
+        std::string n = conf->name;
+        if (n != "listen" && n != "pid" && n != "chunk_size" && n != "ff_log_dir" 
+            && n != "srs_log_tank" && n != "srs_log_level" && n != "srs_log_file"
+            && n != "max_connections" && n != "daemon" && n != "heartbeat"
+            && n != "http_api" && n != "http_stream" && n != "stats" && n != "vhost"
+            && n != "pithy_print") 
+        {
+            ret = ERROR_SYSTEM_CONFIG_INVALID;
+            srs_error("unsupported directive %s, ret=%d", n.c_str(), ret);
+            return ret;
+        }
+    }
+    if (true) {
+        SrsConfDirective* conf = get_http_api();
+        for (int i = 0; conf && i < (int)conf->directives.size(); i++) {
+            string n = conf->at(i)->name;
+            if (n != "enabled" && n != "listen") {
+                ret = ERROR_SYSTEM_CONFIG_INVALID;
+                srs_error("unsupported http_api directive %s, ret=%d", n.c_str(), ret);
+                return ret;
+            }
+        }
+    }
+    if (true) {
+        SrsConfDirective* conf = get_http_stream();
+        for (int i = 0; conf && i < (int)conf->directives.size(); i++) {
+            string n = conf->at(i)->name;
+            if (n != "enabled" && n != "listen" && n != "dir") {
+                ret = ERROR_SYSTEM_CONFIG_INVALID;
+                srs_error("unsupported http_stream directive %s, ret=%d", n.c_str(), ret);
+                return ret;
+            }
+        }
+    }
+    if (true) {
+        SrsConfDirective* conf = get_heartbeart();
+        for (int i = 0; conf && i < (int)conf->directives.size(); i++) {
+            string n = conf->at(i)->name;
+            if (n != "enabled" && n != "interval" && n != "url" 
+                && n != "device_id" && n != "summaries"
+            ) {
+                ret = ERROR_SYSTEM_CONFIG_INVALID;
+                srs_error("unsupported heartbeat directive %s, ret=%d", n.c_str(), ret);
+                return ret;
+            }
+        }
+    }
+    if (true) {
+        SrsConfDirective* conf = get_stats();
+        for (int i = 0; conf && i < (int)conf->directives.size(); i++) {
+            string n = conf->at(i)->name;
+            if (n != "network" && n != "disk") {
+                ret = ERROR_SYSTEM_CONFIG_INVALID;
+                srs_error("unsupported stats directive %s, ret=%d", n.c_str(), ret);
+                return ret;
+            }
+        }
+    }
+    if (true) {
+        SrsConfDirective* conf = get_pithy_print();
+        for (int i = 0; conf && i < (int)conf->directives.size(); i++) {
+            string n = conf->at(i)->name;
+            if (n != "publish" && n != "play" && n != "forwarder" 
+                && n != "encoder" && n != "ingester" && n != "hls" && n != "edge"
+            ) {
+                ret = ERROR_SYSTEM_CONFIG_INVALID;
+                srs_error("unsupported pithy_print directive %s, ret=%d", n.c_str(), ret);
+                return ret;
+            }
+        }
+    }
+    for (int n = 0; n < (int)vhosts.size(); n++) {
+        SrsConfDirective* vhost = vhosts[n];
+        for (int i = 0; vhost && i < (int)vhost->directives.size(); i++) {
+            SrsConfDirective* conf = vhost->at(i);
+            string n = conf->name;
+            if (n != "enabled" && n != "chunk_size"
+                && n != "mode" && n != "origin" && n != "token_traverse"
+                && n != "dvr" && n != "ingest" && n != "http" && n != "hls" && n != "http_hooks"
+                && n != "gop_cache" && n != "queue_length"
+                && n != "refer" && n != "refer_publish" && n != "refer_play"
+                && n != "forward" && n != "transcode" && n != "bandcheck"
+                && n != "time_jitter" 
+                && n != "atc" && n != "atc_auto"
+                && n != "debug_srs_upnode"
+            ) {
+                ret = ERROR_SYSTEM_CONFIG_INVALID;
+                srs_error("unsupported vhost directive %s, ret=%d", n.c_str(), ret);
+                return ret;
+            }
+            // for each sub directives of vhost.
+            if (n == "dvr") {
+                for (int j = 0; j < (int)conf->directives.size(); j++) {
+                    string m = conf->at(j)->name.c_str();
+                    if (m != "enabled" && m != "dvr_path" && m != "dvr_plan"
+                        && m != "dvr_duration" && m != "dvr_wait_keyframe" && m != "time_jitter"
+                    ) {
+                        ret = ERROR_SYSTEM_CONFIG_INVALID;
+                        srs_error("unsupported vhost dvr directive %s, ret=%d", m.c_str(), ret);
+                        return ret;
+                    }
+                }
+            } else if (n == "ingest") {
+                for (int j = 0; j < (int)conf->directives.size(); j++) {
+                    string m = conf->at(j)->name.c_str();
+                    if (m != "enabled" && m != "input" && m != "ffmpeg"
+                        && m != "engine"
+                    ) {
+                        ret = ERROR_SYSTEM_CONFIG_INVALID;
+                        srs_error("unsupported vhost ingest directive %s, ret=%d", m.c_str(), ret);
+                        return ret;
+                    }
+                }
+            } else if (n == "http") {
+                for (int j = 0; j < (int)conf->directives.size(); j++) {
+                    string m = conf->at(j)->name.c_str();
+                    if (m != "enabled" && m != "mount" && m != "dir") {
+                        ret = ERROR_SYSTEM_CONFIG_INVALID;
+                        srs_error("unsupported vhost http directive %s, ret=%d", m.c_str(), ret);
+                        return ret;
+                    }
+                }
+            } else if (n == "hls") {
+                for (int j = 0; j < (int)conf->directives.size(); j++) {
+                    string m = conf->at(j)->name.c_str();
+                    if (m != "enabled" && m != "hls_path" && m != "hls_fragment" && m != "hls_window" && m != "hls_on_error") {
+                        ret = ERROR_SYSTEM_CONFIG_INVALID;
+                        srs_error("unsupported vhost hls directive %s, ret=%d", m.c_str(), ret);
+                        return ret;
+                    }
+                }
+            } else if (n == "http_hooks") {
+                for (int j = 0; j < (int)conf->directives.size(); j++) {
+                    string m = conf->at(j)->name.c_str();
+                    if (m != "enabled" && m != "on_connect" && m != "on_close" && m != "on_publish"
+                        && m != "on_unpublish" && m != "on_play" && m != "on_stop"
+                    ) {
+                        ret = ERROR_SYSTEM_CONFIG_INVALID;
+                        srs_error("unsupported vhost http_hooks directive %s, ret=%d", m.c_str(), ret);
+                        return ret;
+                    }
+                }
+            } else if (n == "forward") {
+                // TODO: FIXME: implements it.
+                /*for (int j = 0; j < (int)conf->directives.size(); j++) {
+                    string m = conf->at(j)->name.c_str();
+                    if (m != "enabled" && m != "vhost" && m != "refer") {
+                        ret = ERROR_SYSTEM_CONFIG_INVALID;
+                        srs_error("unsupported vhost forward directive %s, ret=%d", m.c_str(), ret);
+                        return ret;
+                    }
+                }*/
+            } else if (n == "transcode") {
+                for (int j = 0; j < (int)conf->directives.size(); j++) {
+                    SrsConfDirective* trans = conf->at(j);
+                    string m = trans->name.c_str();
+                    if (m != "enabled" && m != "ffmpeg" && m != "engine") {
+                        ret = ERROR_SYSTEM_CONFIG_INVALID;
+                        srs_error("unsupported vhost transcode directive %s, ret=%d", m.c_str(), ret);
+                        return ret;
+                    }
+                    if (m == "engine") {
+                        for (int k = 0; k < (int)trans->directives.size(); k++) {
+                            string e = trans->at(k)->name;
+                            if (e != "enabled" && e != "vfilter" && e != "vcodec"
+                                && e != "vbitrate" && e != "vfps" && e != "vwidth" && e != "vheight"
+                                && e != "vthreads" && e != "vprofile" && e != "vpreset" && e != "vparams"
+                                && e != "acodec" && e != "abitrate" && e != "asample_rate" && e != "achannels"
+                                && e != "aparams" && e != "output"
+                                && e != "iformat" && e != "oformat"
+                            ) {
+                                ret = ERROR_SYSTEM_CONFIG_INVALID;
+                                srs_error("unsupported vhost transcode engine directive %s, ret=%d", e.c_str(), ret);
+                                return ret;
+                            }
+                        }
+                    }
+                }
+            } else if (n == "bandcheck") {
+                for (int j = 0; j < (int)conf->directives.size(); j++) {
+                    string m = conf->at(j)->name.c_str();
+                    if (m != "enabled" && m != "key" && m != "interval" && m != "limit_kbps") {
+                        ret = ERROR_SYSTEM_CONFIG_INVALID;
+                        srs_error("unsupported vhost bandcheck directive %s, ret=%d", m.c_str(), ret);
+                        return ret;
+                    }
+                }
+            }
+        }
+    }
+    // check ingest id unique.
+    for (int i = 0; i < (int)vhosts.size(); i++) {
+        SrsConfDirective* vhost = vhosts[i];
+        std::vector<std::string> ids;
+        
+        for (int j = 0; j < (int)vhost->directives.size(); j++) {
+            SrsConfDirective* conf = vhost->at(j);
+            if (conf->name != "ingest") {
+                continue;
+            }
+            
+            std::string id = conf->arg0();
+            for (int k = 0; k < (int)ids.size(); k++) {
+                if (id == ids.at(k)) {
+                    ret = ERROR_SYSTEM_CONFIG_INVALID;
+                    srs_error("directive \"ingest\" id duplicated, vhost=%s, id=%s, ret=%d", 
+                        vhost->name.c_str(), id.c_str(), ret);
+                    return ret;
+                }
+            }
+            ids.push_back(id);
+        }
+    }
+    
+    ////////////////////////////////////////////////////////////////////////
+    // check listen for rtmp.
+    ////////////////////////////////////////////////////////////////////////
+    if (true) {
+        vector<string> listens = get_listen();
+        if (listens.size() <= 0) {
+            ret = ERROR_SYSTEM_CONFIG_INVALID;
+            srs_error("directive \"listen\" is empty, ret=%d", ret);
+            return ret;
+        }
+        for (int i = 0; i < (int)listens.size(); i++) {
+            string port = listens[i];
+            if (port.empty() || ::atoi(port.c_str()) <= 0) {
+                ret = ERROR_SYSTEM_CONFIG_INVALID;
+                srs_error("directive listen invalid, port=%s, ret=%d", port.c_str(), ret);
+                return ret;
+            }
+        }
+    }
+    
+    ////////////////////////////////////////////////////////////////////////
+    // check max connections
+    ////////////////////////////////////////////////////////////////////////
+    if (get_max_connections() <= 0) {
+        ret = ERROR_SYSTEM_CONFIG_INVALID;
+        srs_error("directive max_connections invalid, max_connections=%d, ret=%d", get_max_connections(), ret);
+        return ret;
+    }
+    
+    // check max connections of system limits
+    if (true) {
+        int max_open_files = sysconf(_SC_OPEN_MAX);
+        if (get_max_connections() > max_open_files) {
+            ret = ERROR_SYSTEM_CONFIG_INVALID;
+            srs_error("invalid max_connections=%d, system limit to %d, ret=%d. "
+                "you can login as root and set the limit: ulimit -HSn %d", get_max_connections(), max_open_files,
+                ret, get_max_connections());
+            return ret;
+        }
+    }
+    
+    ////////////////////////////////////////////////////////////////////////
+    // check heartbeat
+    ////////////////////////////////////////////////////////////////////////
+    if (get_heartbeat_interval() <= 0) {
+        ret = ERROR_SYSTEM_CONFIG_INVALID;
+        srs_error("directive heartbeat interval invalid, interval=%"PRId64", ret=%d", 
+            get_heartbeat_interval(), ret);
+        return ret;
+    }
+    
+    ////////////////////////////////////////////////////////////////////////
+    // check stats
+    ////////////////////////////////////////////////////////////////////////
+    if (get_stats_network() < 0) {
+        ret = ERROR_SYSTEM_CONFIG_INVALID;
+        srs_error("directive stats network invalid, network=%d, ret=%d", 
+            get_stats_network(), ret);
+        return ret;
+    }
+    if (true) {
+        vector<std::string> ips = srs_get_local_ipv4_ips();
+        int index = get_stats_network();
+        if (index >= (int)ips.size()) {
+            ret = ERROR_SYSTEM_CONFIG_INVALID;
+            srs_error("stats network invalid, total local ip count=%d, index=%d, ret=%d",
+                (int)ips.size(), index, ret);
+            return ret;
+        }
+        srs_warn("stats network use index=%d, ip=%s", index, ips.at(index).c_str());
+    }
+    if (true) {
+        SrsConfDirective* conf = get_stats_disk_device();
+        if (conf == NULL || (int)conf->args.size() <= 0) {
+            srs_warn("stats disk not configed, disk iops disabled.");
+        } else {
+            string disks;
+            for (int i = 0; i < (int)conf->args.size(); i++) {
+                disks += conf->args.at(i);
+                disks += " ";
+            }
+            srs_warn("stats disk list: %s", disks.c_str());
+        }
+    }
+    
+    ////////////////////////////////////////////////////////////////////////
+    // check http api
+    ////////////////////////////////////////////////////////////////////////
+    if (get_http_api_listen() <= 0) {
+        ret = ERROR_SYSTEM_CONFIG_INVALID;
+        srs_error("directive http_api listen invalid, listen=%d, ret=%d", 
+            get_http_api_listen(), ret);
+        return ret;
+    }
+    
+    ////////////////////////////////////////////////////////////////////////
+    // check http stream
+    ////////////////////////////////////////////////////////////////////////
+    if (get_http_stream_listen() <= 0) {
+        ret = ERROR_SYSTEM_CONFIG_INVALID;
+        srs_error("directive http_stream listen invalid, listen=%d, ret=%d", 
+            get_http_stream_listen(), ret);
+        return ret;
+    }
+    
+    ////////////////////////////////////////////////////////////////////////
+    // check chunk size
+    ////////////////////////////////////////////////////////////////////////
+    if (get_global_chunk_size() < SRS_CONSTS_RTMP_MIN_CHUNK_SIZE 
+        || get_global_chunk_size() > SRS_CONSTS_RTMP_MAX_CHUNK_SIZE
+    ) {
+        ret = ERROR_SYSTEM_CONFIG_INVALID;
+        srs_error("directive chunk_size invalid, chunk_size=%d, must in [%d, %d], ret=%d", 
+            get_global_chunk_size(), SRS_CONSTS_RTMP_MIN_CHUNK_SIZE, 
+            SRS_CONSTS_RTMP_MAX_CHUNK_SIZE, ret);
+        return ret;
+    }
+    for (int i = 0; i < (int)vhosts.size(); i++) {
+        SrsConfDirective* vhost = vhosts[i];
+        if (get_chunk_size(vhost->arg0()) < SRS_CONSTS_RTMP_MIN_CHUNK_SIZE 
+            || get_chunk_size(vhost->arg0()) > SRS_CONSTS_RTMP_MAX_CHUNK_SIZE
+        ) {
+            ret = ERROR_SYSTEM_CONFIG_INVALID;
+            srs_error("directive vhost %s chunk_size invalid, chunk_size=%d, must in [%d, %d], ret=%d", 
+                vhost->arg0().c_str(), get_chunk_size(vhost->arg0()), SRS_CONSTS_RTMP_MIN_CHUNK_SIZE, 
+                SRS_CONSTS_RTMP_MAX_CHUNK_SIZE, ret);
+            return ret;
+        }
+    }
+    
+    ////////////////////////////////////////////////////////////////////////
+    // check log name and level
+    ////////////////////////////////////////////////////////////////////////
+    if (true) {
+        std::string log_filename = this->get_log_file();
+        if (get_log_tank_file() && log_filename.empty()) {
+            ret = ERROR_SYSTEM_CONFIG_INVALID;
+            srs_error("must specifies the file to write log to. ret=%d", ret);
+            return ret;
+        }
+        if (get_log_tank_file()) {
+            srs_trace("write log to file %s", log_filename.c_str());
+            srs_trace("you can: tailf %s", log_filename.c_str());
+            srs_trace("@see: %s", SRS_WIKI_URL_LOG);
+        } else {
+            srs_trace("write log to console");
+        }
+    }
+    
+    ////////////////////////////////////////////////////////////////////////
+    // check features
+    ////////////////////////////////////////////////////////////////////////
+#ifndef SRS_AUTO_HTTP_SERVER
+    if (get_http_stream_enabled()) {
+        srs_warn("http_stream is disabled by configure");
+    }
+#endif
+#ifndef SRS_AUTO_HTTP_API
+    if (get_http_api_enabled()) {
+        srs_warn("http_api is disabled by configure");
+    }
+#endif
+    for (int i = 0; i < (int)vhosts.size(); i++) {
+        SrsConfDirective* vhost = vhosts[i];
+        srs_assert(vhost != NULL);
+#ifndef SRS_AUTO_DVR
+        if (get_dvr_enabled(vhost->arg0())) {
+            srs_warn("dvr of vhost %s is disabled by configure", vhost->arg0().c_str());
+        }
+#endif
+#ifndef SRS_AUTO_HLS
+        if (get_hls_enabled(vhost->arg0())) {
+            srs_warn("hls of vhost %s is disabled by configure", vhost->arg0().c_str());
+        }
+#endif
+#ifndef SRS_AUTO_HTTP_CALLBACK
+        if (get_vhost_http_hooks_enabled(vhost->arg0())) {
+            srs_warn("http_hooks of vhost %s is disabled by configure", vhost->arg0().c_str());
+        }
+#endif
+#ifndef SRS_AUTO_TRANSCODE
+        if (get_transcode_enabled(get_transcode(vhost->arg0(), ""))) {
+            srs_warn("transcode of vhost %s is disabled by configure", vhost->arg0().c_str());
+        }
+#endif
+#ifndef SRS_AUTO_INGEST
+        vector<SrsConfDirective*> ingesters = get_ingesters(vhost->arg0());
+        for (int j = 0; j < (int)ingesters.size(); j++) {
+            SrsConfDirective* ingest = ingesters[j];
+            if (get_ingest_enabled(ingest)) {
+                srs_warn("ingest %s of vhost %s is disabled by configure", 
+                    ingest->arg0().c_str(), vhost->arg0().c_str()
+                );
+            }
+        }
+#endif
+    }
+    
+    return ret;
+}
+
+int SrsConfig::parse_buffer(SrsConfigBuffer* buffer)
+{
+    int ret = ERROR_SUCCESS;
+    
+    if ((ret = root->parse(buffer)) != ERROR_SUCCESS) {
+        return ret;
+    }
+
+    return ret;
 }
 
 string SrsConfig::cwd()
@@ -1401,15 +1691,26 @@ int SrsConfig::get_max_connections()
     
     SrsConfDirective* conf = root->get("max_connections");
     if (!conf || conf->arg0().empty()) {
-        return 2000;
+        return SRS_CONF_DEFAULT_MAX_CONNECTIONS;
     }
     
     return ::atoi(conf->arg0().c_str());
 }
 
-SrsConfDirective* SrsConfig::get_listen()
+vector<string> SrsConfig::get_listen()
 {
-    return root->get("listen");
+    std::vector<string> ports;
+    
+    SrsConfDirective* conf = root->get("listen");
+    if (!conf) {
+        return ports;
+    }
+    
+    for (int i = 0; i < (int)conf->args.size(); i++) {
+        ports.push_back(conf->args.at(i));
+    }
+    
+    return ports;
 }
 
 string SrsConfig::get_pid_file()
@@ -1423,16 +1724,21 @@ string SrsConfig::get_pid_file()
     return conf->arg0();
 }
 
+SrsConfDirective* SrsConfig::get_pithy_print()
+{
+    return root->get("pithy_print");
+}
+
 int SrsConfig::get_pithy_print_publish()
 {
-    SrsConfDirective* pithy = root->get("pithy_print");
+    SrsConfDirective* pithy = get_pithy_print();
     if (!pithy) {
-        return SRS_STAGE_PUBLISH_USER_INTERVAL_MS;
+        return SRS_CONF_DEFAULT_STAGE_PUBLISH_USER_INTERVAL_MS;
     }
     
     pithy = pithy->get("publish");
     if (!pithy) {
-        return SRS_STAGE_PUBLISH_USER_INTERVAL_MS;
+        return SRS_CONF_DEFAULT_STAGE_PUBLISH_USER_INTERVAL_MS;
     }
     
     return ::atoi(pithy->arg0().c_str());
@@ -1440,14 +1746,14 @@ int SrsConfig::get_pithy_print_publish()
 
 int SrsConfig::get_pithy_print_forwarder()
 {
-    SrsConfDirective* pithy = root->get("pithy_print");
+    SrsConfDirective* pithy = get_pithy_print();
     if (!pithy) {
-        return SRS_STAGE_FORWARDER_INTERVAL_MS;
+        return SRS_CONF_DEFAULT_STAGE_FORWARDER_INTERVAL_MS;
     }
     
     pithy = pithy->get("forwarder");
     if (!pithy) {
-        return SRS_STAGE_FORWARDER_INTERVAL_MS;
+        return SRS_CONF_DEFAULT_STAGE_FORWARDER_INTERVAL_MS;
     }
     
     return ::atoi(pithy->arg0().c_str());
@@ -1455,14 +1761,14 @@ int SrsConfig::get_pithy_print_forwarder()
 
 int SrsConfig::get_pithy_print_encoder()
 {
-    SrsConfDirective* pithy = root->get("pithy_print");
+    SrsConfDirective* pithy = get_pithy_print();
     if (!pithy) {
-        return SRS_STAGE_ENCODER_INTERVAL_MS;
+        return SRS_CONF_DEFAULT_STAGE_ENCODER_INTERVAL_MS;
     }
     
     pithy = pithy->get("encoder");
     if (!pithy) {
-        return SRS_STAGE_ENCODER_INTERVAL_MS;
+        return SRS_CONF_DEFAULT_STAGE_ENCODER_INTERVAL_MS;
     }
     
     return ::atoi(pithy->arg0().c_str());
@@ -1470,14 +1776,14 @@ int SrsConfig::get_pithy_print_encoder()
 
 int SrsConfig::get_pithy_print_ingester()
 {
-    SrsConfDirective* pithy = root->get("pithy_print");
+    SrsConfDirective* pithy = get_pithy_print();
     if (!pithy) {
-        return SRS_STAGE_INGESTER_INTERVAL_MS;
+        return SRS_CONF_DEFAULT_STAGE_INGESTER_INTERVAL_MS;
     }
     
     pithy = pithy->get("ingester");
     if (!pithy) {
-        return SRS_STAGE_INGESTER_INTERVAL_MS;
+        return SRS_CONF_DEFAULT_STAGE_INGESTER_INTERVAL_MS;
     }
     
     return ::atoi(pithy->arg0().c_str());
@@ -1485,14 +1791,14 @@ int SrsConfig::get_pithy_print_ingester()
 
 int SrsConfig::get_pithy_print_hls()
 {
-    SrsConfDirective* pithy = root->get("pithy_print");
+    SrsConfDirective* pithy = get_pithy_print();
     if (!pithy) {
-        return SRS_STAGE_HLS_INTERVAL_MS;
+        return SRS_CONF_DEFAULT_STAGE_HLS_INTERVAL_MS;
     }
     
     pithy = pithy->get("hls");
     if (!pithy) {
-        return SRS_STAGE_HLS_INTERVAL_MS;
+        return SRS_CONF_DEFAULT_STAGE_HLS_INTERVAL_MS;
     }
     
     return ::atoi(pithy->arg0().c_str());
@@ -1500,14 +1806,14 @@ int SrsConfig::get_pithy_print_hls()
 
 int SrsConfig::get_pithy_print_play()
 {
-    SrsConfDirective* pithy = root->get("pithy_print");
+    SrsConfDirective* pithy = get_pithy_print();
     if (!pithy) {
-        return SRS_STAGE_PLAY_USER_INTERVAL_MS;
+        return SRS_CONF_DEFAULT_STAGE_PLAY_USER_INTERVAL_MS;
     }
     
     pithy = pithy->get("play");
     if (!pithy) {
-        return SRS_STAGE_PLAY_USER_INTERVAL_MS;
+        return SRS_CONF_DEFAULT_STAGE_PLAY_USER_INTERVAL_MS;
     }
     
     return ::atoi(pithy->arg0().c_str());
@@ -1515,14 +1821,14 @@ int SrsConfig::get_pithy_print_play()
 
 int SrsConfig::get_pithy_print_edge()
 {
-    SrsConfDirective* pithy = root->get("pithy_print");
+    SrsConfDirective* pithy = get_pithy_print();
     if (!pithy) {
-        return SRS_STAGE_EDGE_INTERVAL_MS;
+        return SRS_CONF_DEFAULT_STAGE_EDGE_INTERVAL_MS;
     }
     
     pithy = pithy->get("edge");
     if (!pithy) {
-        return SRS_STAGE_EDGE_INTERVAL_MS;
+        return SRS_CONF_DEFAULT_STAGE_EDGE_INTERVAL_MS;
     }
     
     return ::atoi(pithy->arg0().c_str());
@@ -1544,16 +1850,18 @@ SrsConfDirective* SrsConfig::get_vhost(string vhost)
         }
     }
     
-    if (vhost != RTMP_VHOST_DEFAULT) {
-        return get_vhost(RTMP_VHOST_DEFAULT);
+    if (vhost != SRS_CONSTS_RTMP_DEFAULT_VHOST) {
+        return get_vhost(SRS_CONSTS_RTMP_DEFAULT_VHOST);
     }
     
     return NULL;
 }
 
-void SrsConfig::get_vhosts(std::vector<SrsConfDirective*>& vhosts)
+vector<SrsConfDirective*> SrsConfig::get_vhosts()
 {
     srs_assert(root);
+    
+    std::vector<SrsConfDirective*> vhosts;
     
     for (int i = 0; i < (int)root->directives.size(); i++) {
         SrsConfDirective* conf = root->at(i);
@@ -1564,153 +1872,8 @@ void SrsConfig::get_vhosts(std::vector<SrsConfDirective*>& vhosts)
         
         vhosts.push_back(conf);
     }
-}
-
-SrsConfDirective* SrsConfig::get_vhost_on_connect(string vhost)
-{
-    SrsConfDirective* conf = get_vhost(vhost);
-
-    if (!conf) { 
-        return NULL;
-    }
     
-    conf = conf->get("http_hooks");
-    if (!conf) {
-        return NULL;
-    }
-    
-    SrsConfDirective* enabled = conf->get("enabled");
-    if (!enabled || enabled->arg0() != "on") {
-        return NULL;
-    }
-    
-    return conf->get("on_connect");
-}
-
-SrsConfDirective* SrsConfig::get_vhost_on_close(string vhost)
-{
-    SrsConfDirective* conf = get_vhost(vhost);
-
-    if (!conf) { 
-        return NULL;
-    }
-    
-    conf = conf->get("http_hooks");
-    if (!conf) {
-        return NULL;
-    }
-    
-    SrsConfDirective* enabled = conf->get("enabled");
-    if (!enabled || enabled->arg0() != "on") {
-        return NULL;
-    }
-    
-    return conf->get("on_close");
-}
-
-SrsConfDirective* SrsConfig::get_vhost_on_publish(string vhost)
-{
-    SrsConfDirective* conf = get_vhost(vhost);
-
-    if (!conf) { 
-        return NULL;
-    }
-    
-    conf = conf->get("http_hooks");
-    if (!conf) {
-        return NULL;
-    }
-    
-    SrsConfDirective* enabled = conf->get("enabled");
-    if (!enabled || enabled->arg0() != "on") {
-        return NULL;
-    }
-    
-    return conf->get("on_publish");
-}
-
-SrsConfDirective* SrsConfig::get_vhost_on_unpublish(string vhost)
-{
-    SrsConfDirective* conf = get_vhost(vhost);
-
-    if (!conf) { 
-        return NULL;
-    }
-    
-    conf = conf->get("http_hooks");
-    if (!conf) {
-        return NULL;
-    }
-    
-    SrsConfDirective* enabled = conf->get("enabled");
-    if (!enabled || enabled->arg0() != "on") {
-        return NULL;
-    }
-    
-    return conf->get("on_unpublish");
-}
-
-SrsConfDirective* SrsConfig::get_vhost_on_play(string vhost)
-{
-    SrsConfDirective* conf = get_vhost(vhost);
-
-    if (!conf) { 
-        return NULL;
-    }
-    
-    conf = conf->get("http_hooks");
-    if (!conf) {
-        return NULL;
-    }
-    
-    SrsConfDirective* enabled = conf->get("enabled");
-    if (!enabled || enabled->arg0() != "on") {
-        return NULL;
-    }
-    
-    return conf->get("on_play");
-}
-
-SrsConfDirective* SrsConfig::get_vhost_on_stop(string vhost)
-{
-    SrsConfDirective* conf = get_vhost(vhost);
-
-    if (!conf) { 
-        return NULL;
-    }
-    
-    conf = conf->get("http_hooks");
-    if (!conf) {
-        return NULL;
-    }
-    
-    SrsConfDirective* enabled = conf->get("enabled");
-    if (!enabled || enabled->arg0() != "on") {
-        return NULL;
-    }
-    
-    return conf->get("on_stop");
-}
-
-SrsConfDirective* SrsConfig::get_vhost_on_dvr_hss_reap_flv(string vhost)
-{
-    SrsConfDirective* conf = get_vhost(vhost);
-
-    if (!conf) { 
-        return NULL;
-    }
-    
-    conf = conf->get("http_hooks");
-    if (!conf) {
-        return NULL;
-    }
-    
-    SrsConfDirective* enabled = conf->get("enabled");
-    if (!enabled || enabled->arg0() != "on") {
-        return NULL;
-    }
-    
-    return conf->get("on_dvr_hss_reap_flv");
+    return vhosts;
 }
 
 bool SrsConfig::get_vhost_enabled(string vhost)
@@ -1754,6 +1917,22 @@ bool SrsConfig::get_gop_cache(string vhost)
     return true;
 }
 
+bool SrsConfig::get_debug_srs_upnode(string vhost)
+{
+    SrsConfDirective* conf = get_vhost(vhost);
+
+    if (!conf) {
+        return true;
+    }
+    
+    conf = conf->get("debug_srs_upnode");
+    if (conf && conf->arg0() == "off") {
+        return false;
+    }
+    
+    return true;
+}
+
 bool SrsConfig::get_atc(string vhost)
 {
     SrsConfDirective* conf = get_vhost(vhost);
@@ -1786,6 +1965,23 @@ bool SrsConfig::get_atc_auto(string vhost)
     return true;
 }
 
+int SrsConfig::get_time_jitter(string vhost)
+{
+    SrsConfDirective* dvr = get_vhost(vhost);
+    
+    std::string time_jitter = SRS_CONF_DEFAULT_TIME_JITTER;
+    
+    if (dvr) {
+        SrsConfDirective* conf = dvr->get("time_jitter");
+    
+        if (conf) {
+            time_jitter = conf->arg0();
+        }
+    }
+    
+    return _srs_time_jitter_string2int(time_jitter);
+}
+
 double SrsConfig::get_queue_length(string vhost)
 {
     SrsConfDirective* conf = get_vhost(vhost);
@@ -1800,17 +1996,6 @@ double SrsConfig::get_queue_length(string vhost)
     }
     
     return ::atoi(conf->arg0().c_str());
-}
-
-SrsConfDirective* SrsConfig::get_forward(string vhost)
-{
-    SrsConfDirective* conf = get_vhost(vhost);
-
-    if (!conf) {
-        return NULL;
-    }
-    
-    return conf->get("forward");
 }
 
 SrsConfDirective* SrsConfig::get_refer(string vhost)
@@ -1846,30 +2031,145 @@ SrsConfDirective* SrsConfig::get_refer_publish(string vhost)
     return conf->get("refer_publish");
 }
 
-int SrsConfig::get_chunk_size(const string &vhost)
+int SrsConfig::get_chunk_size(string vhost)
 {
+    if (vhost.empty()) {
+        return get_global_chunk_size();
+    }
+    
     SrsConfDirective* conf = get_vhost(vhost);
 
     if (!conf) {
-        return SRS_CONF_DEFAULT_CHUNK_SIZE;
+        // vhost does not specify the chunk size,
+        // use the global instead.
+        return get_global_chunk_size();
     }
 
     conf = conf->get("chunk_size");
     if (!conf) {
         // vhost does not specify the chunk size,
         // use the global instead.
-        conf = root->get("chunk_size");
-        if (!conf) {
-            return SRS_CONF_DEFAULT_CHUNK_SIZE;
-        }
-        
-        return ::atoi(conf->arg0().c_str());
+        return get_global_chunk_size();
     }
 
     return ::atoi(conf->arg0().c_str());
 }
 
-bool SrsConfig::get_bw_check_enabled(const string &vhost)
+int SrsConfig::get_global_chunk_size()
+{
+    SrsConfDirective* conf = root->get("chunk_size");
+    if (!conf) {
+        return SRS_CONSTS_RTMP_SRS_CHUNK_SIZE;
+    }
+    
+    return ::atoi(conf->arg0().c_str());
+}
+
+SrsConfDirective* SrsConfig::get_forward(string vhost)
+{
+    SrsConfDirective* conf = get_vhost(vhost);
+
+    if (!conf) {
+        return NULL;
+    }
+    
+    return conf->get("forward");
+}
+
+SrsConfDirective* SrsConfig::get_vhost_http_hooks(string vhost)
+{
+    SrsConfDirective* conf = get_vhost(vhost);
+
+    if (!conf) { 
+        return NULL;
+    }
+    
+    return conf->get("http_hooks");
+}
+
+bool SrsConfig::get_vhost_http_hooks_enabled(string vhost)
+{
+    SrsConfDirective* conf = get_vhost_http_hooks(vhost);
+
+    if (!conf) { 
+        return false;
+    }
+    
+    SrsConfDirective* enabled = conf->get("enabled");
+    if (!enabled || enabled->arg0() != "on") {
+        return false;
+    }
+    
+    return true;
+}
+
+SrsConfDirective* SrsConfig::get_vhost_on_connect(string vhost)
+{
+    SrsConfDirective* conf = get_vhost_http_hooks(vhost);
+
+    if (!conf) { 
+        return NULL;
+    }
+    
+    return conf->get("on_connect");
+}
+
+SrsConfDirective* SrsConfig::get_vhost_on_close(string vhost)
+{
+    SrsConfDirective* conf = get_vhost_http_hooks(vhost);
+
+    if (!conf) { 
+        return NULL;
+    }
+    
+    return conf->get("on_close");
+}
+
+SrsConfDirective* SrsConfig::get_vhost_on_publish(string vhost)
+{
+    SrsConfDirective* conf = get_vhost_http_hooks(vhost);
+
+    if (!conf) { 
+        return NULL;
+    }
+    
+    return conf->get("on_publish");
+}
+
+SrsConfDirective* SrsConfig::get_vhost_on_unpublish(string vhost)
+{
+    SrsConfDirective* conf = get_vhost_http_hooks(vhost);
+
+    if (!conf) { 
+        return NULL;
+    }
+    
+    return conf->get("on_unpublish");
+}
+
+SrsConfDirective* SrsConfig::get_vhost_on_play(string vhost)
+{
+    SrsConfDirective* conf = get_vhost_http_hooks(vhost);
+
+    if (!conf) { 
+        return NULL;
+    }
+    
+    return conf->get("on_play");
+}
+
+SrsConfDirective* SrsConfig::get_vhost_on_stop(string vhost)
+{
+    SrsConfDirective* conf = get_vhost_http_hooks(vhost);
+
+    if (!conf) { 
+        return NULL;
+    }
+    
+    return conf->get("on_stop");
+}
+
+bool SrsConfig::get_bw_check_enabled(string vhost)
 {
     SrsConfDirective* conf = get_vhost(vhost);
 
@@ -1890,7 +2190,7 @@ bool SrsConfig::get_bw_check_enabled(const string &vhost)
     return true;
 }
 
-string SrsConfig::get_bw_check_key(const string &vhost)
+string SrsConfig::get_bw_check_key(string vhost)
 {
     SrsConfDirective* conf = get_vhost(vhost);
 
@@ -1911,28 +2211,28 @@ string SrsConfig::get_bw_check_key(const string &vhost)
     return conf->arg0();
 }
 
-int SrsConfig::get_bw_check_interval_ms(const string &vhost)
+int SrsConfig::get_bw_check_interval_ms(string vhost)
 {
     SrsConfDirective* conf = get_vhost(vhost);
 
     if (!conf) {
-        return SRS_CONF_DEFAULT_BANDWIDTH_INTERVAL;
+        return SRS_CONF_DEFAULT_BANDWIDTH_INTERVAL * 1000;
     }
 
     conf = conf->get("bandcheck");
     if (!conf) {
-        return SRS_CONF_DEFAULT_BANDWIDTH_INTERVAL;
+        return SRS_CONF_DEFAULT_BANDWIDTH_INTERVAL * 1000;
     }
     
-    conf = conf->get("interval_ms");
+    conf = conf->get("interval");
     if (!conf) {
-        return SRS_CONF_DEFAULT_BANDWIDTH_INTERVAL;
+        return SRS_CONF_DEFAULT_BANDWIDTH_INTERVAL * 1000;
     }
 
-    return ::atoi(conf->arg0().c_str()) * 1000;
+    return (int)(::atof(conf->arg0().c_str()) * 1000);
 }
 
-int SrsConfig::get_bw_check_limit_kbps(const string &vhost)
+int SrsConfig::get_bw_check_limit_kbps(string vhost)
 {
     SrsConfDirective* conf = get_vhost(vhost);
 
@@ -1953,7 +2253,7 @@ int SrsConfig::get_bw_check_limit_kbps(const string &vhost)
     return ::atoi(conf->arg0().c_str());
 }
 
-bool SrsConfig::get_vhost_is_edge(std::string vhost)
+bool SrsConfig::get_vhost_is_edge(string vhost)
 {
     SrsConfDirective* conf = get_vhost(vhost);
     return get_vhost_is_edge(conf);
@@ -1984,6 +2284,22 @@ SrsConfDirective* SrsConfig::get_vhost_edge_origin(string vhost)
     }
     
     return conf->get("origin");
+}
+
+bool SrsConfig::get_vhost_edge_token_traverse(string vhost)
+{
+    SrsConfDirective* conf = get_vhost(vhost);
+    
+    if (!conf) {
+        return false;
+    }
+    
+    conf = conf->get("token_traverse");
+    if (!conf || conf->arg0() != "on") {
+        return false;
+    }
+    
+    return true;
 }
 
 SrsConfDirective* SrsConfig::get_transcode(string vhost, string scope)
@@ -2034,10 +2350,12 @@ string SrsConfig::get_transcode_ffmpeg(SrsConfDirective* transcode)
     return conf->arg0();
 }
 
-void SrsConfig::get_transcode_engines(SrsConfDirective* transcode, vector<SrsConfDirective*>& engines)
+vector<SrsConfDirective*> SrsConfig::get_transcode_engines(SrsConfDirective* transcode)
 {
+    vector<SrsConfDirective*> engines;
+    
     if (!transcode) {
-        return;
+        return engines;
     }
     
     for (int i = 0; i < (int)transcode->directives.size(); i++) {
@@ -2048,7 +2366,7 @@ void SrsConfig::get_transcode_engines(SrsConfDirective* transcode, vector<SrsCon
         }
     }
     
-    return;
+    return engines;
 }
 
 bool SrsConfig::get_engine_enabled(SrsConfDirective* engine)
@@ -2063,6 +2381,46 @@ bool SrsConfig::get_engine_enabled(SrsConfDirective* engine)
     }
     
     return true;
+}
+
+string SrsConfig::get_engine_iformat(SrsConfDirective* engine)
+{
+    if (!engine) {
+        return SRS_CONF_DEFAULT_TRANSCODE_IFORMAT;
+    }
+    
+    SrsConfDirective* conf = engine->get("iformat");
+    if (!conf) {
+        return SRS_CONF_DEFAULT_TRANSCODE_IFORMAT;
+    }
+    
+    return conf->arg0();
+}
+
+vector<string> SrsConfig::get_engine_vfilter(SrsConfDirective* engine)
+{
+    vector<string> vfilter;
+    
+    if (!engine) {
+        return vfilter;
+    }
+    
+    SrsConfDirective* conf = engine->get("vfilter");
+    if (!conf) {
+        return vfilter;
+    }
+    
+    for (int i = 0; i < (int)conf->directives.size(); i++) {
+        SrsConfDirective* p = conf->directives[i];
+        if (!p) {
+            continue;
+        }
+        
+        vfilter.push_back("-" + p->name);
+        vfilter.push_back(p->arg0());
+    }
+    
+    return vfilter;
 }
 
 string SrsConfig::get_engine_vcodec(SrsConfDirective* engine)
@@ -2177,15 +2535,17 @@ string SrsConfig::get_engine_vpreset(SrsConfDirective* engine)
     return conf->arg0();
 }
 
-void SrsConfig::get_engine_vparams(SrsConfDirective* engine, vector<string>& vparams)
+vector<string> SrsConfig::get_engine_vparams(SrsConfDirective* engine)
 {
+    vector<string> vparams;
+
     if (!engine) {
-        return;
+        return vparams;
     }
     
     SrsConfDirective* conf = engine->get("vparams");
     if (!conf) {
-        return;
+        return vparams;
     }
     
     for (int i = 0; i < (int)conf->directives.size(); i++) {
@@ -2197,28 +2557,8 @@ void SrsConfig::get_engine_vparams(SrsConfDirective* engine, vector<string>& vpa
         vparams.push_back("-" + p->name);
         vparams.push_back(p->arg0());
     }
-}
-
-void SrsConfig::get_engine_vfilter(SrsConfDirective* engine, vector<string>& vfilter)
-{
-    if (!engine) {
-        return;
-    }
     
-    SrsConfDirective* conf = engine->get("vfilter");
-    if (!conf) {
-        return;
-    }
-    
-    for (int i = 0; i < (int)conf->directives.size(); i++) {
-        SrsConfDirective* p = conf->directives[i];
-        if (!p) {
-            continue;
-        }
-        
-        vfilter.push_back("-" + p->name);
-        vfilter.push_back(p->arg0());
-    }
+    return vparams;
 }
 
 string SrsConfig::get_engine_acodec(SrsConfDirective* engine)
@@ -2277,15 +2617,17 @@ int SrsConfig::get_engine_achannels(SrsConfDirective* engine)
     return ::atoi(conf->arg0().c_str());
 }
 
-void SrsConfig::get_engine_aparams(SrsConfDirective* engine, vector<string>& aparams)
+vector<string> SrsConfig::get_engine_aparams(SrsConfDirective* engine)
 {
+    vector<string> aparams;
+    
     if (!engine) {
-        return;
+        return aparams;
     }
     
     SrsConfDirective* conf = engine->get("aparams");
     if (!conf) {
-        return;
+        return aparams;
     }
     
     for (int i = 0; i < (int)conf->directives.size(); i++) {
@@ -2297,6 +2639,22 @@ void SrsConfig::get_engine_aparams(SrsConfDirective* engine, vector<string>& apa
         aparams.push_back("-" + p->name);
         aparams.push_back(p->arg0());
     }
+    
+    return aparams;
+}
+
+string SrsConfig::get_engine_oformat(SrsConfDirective* engine)
+{
+    if (!engine) {
+        return SRS_CONF_DEFAULT_TRANSCODE_OFORMAT;
+    }
+    
+    SrsConfDirective* conf = engine->get("oformat");
+    if (!conf) {
+        return SRS_CONF_DEFAULT_TRANSCODE_OFORMAT;
+    }
+    
+    return conf->arg0();
 }
 
 string SrsConfig::get_engine_output(SrsConfDirective* engine)
@@ -2313,11 +2671,13 @@ string SrsConfig::get_engine_output(SrsConfDirective* engine)
     return conf->arg0();
 }
 
-void SrsConfig::get_ingesters(std::string vhost, std::vector<SrsConfDirective*>& ingeters)
+vector<SrsConfDirective*> SrsConfig::get_ingesters(string vhost)
 {
+    vector<SrsConfDirective*> ingeters;
+    
     SrsConfDirective* vhost_conf = get_vhost(vhost);
     if (!vhost_conf) {
-        return;
+        return ingeters;
     }
     
     for (int i = 0; i < (int)vhost_conf->directives.size(); i++) {
@@ -2328,10 +2688,10 @@ void SrsConfig::get_ingesters(std::string vhost, std::vector<SrsConfDirective*>&
         }
     }
     
-    return;
+    return ingeters;
 }
 
-SrsConfDirective* SrsConfig::get_ingest_by_id(std::string vhost, std::string ingest_id)
+SrsConfDirective* SrsConfig::get_ingest_by_id(string vhost, string ingest_id)
 {
     SrsConfDirective* conf = get_vhost(vhost);
     if (!conf) {
@@ -2344,6 +2704,10 @@ SrsConfDirective* SrsConfig::get_ingest_by_id(std::string vhost, std::string ing
 
 bool SrsConfig::get_ingest_enabled(SrsConfDirective* ingest)
 {
+    if (!ingest) {
+        return false;
+    }
+    
     SrsConfDirective* conf = ingest->get("enabled");
     
     if (!conf || conf->arg0() != "on") {
@@ -2355,6 +2719,10 @@ bool SrsConfig::get_ingest_enabled(SrsConfDirective* ingest)
 
 string SrsConfig::get_ingest_ffmpeg(SrsConfDirective* ingest)
 {
+    if (!ingest) {
+        return "";
+    }
+    
     SrsConfDirective* conf = ingest->get("ffmpeg");
     
     if (!conf) {
@@ -2366,16 +2734,20 @@ string SrsConfig::get_ingest_ffmpeg(SrsConfDirective* ingest)
 
 string SrsConfig::get_ingest_input_type(SrsConfDirective* ingest)
 {
+    if (!ingest) {
+        return SRS_CONF_DEFAULT_INGEST_TYPE_FILE;
+    }
+    
     SrsConfDirective* conf = ingest->get("input");
     
     if (!conf) {
-        return SRS_AUTO_INGEST_TYPE_FILE;
+        return SRS_CONF_DEFAULT_INGEST_TYPE_FILE;
     }
 
     conf = conf->get("type");
     
     if (!conf) {
-        return SRS_AUTO_INGEST_TYPE_FILE;
+        return SRS_CONF_DEFAULT_INGEST_TYPE_FILE;
     }
     
     return conf->arg0();
@@ -2383,6 +2755,10 @@ string SrsConfig::get_ingest_input_type(SrsConfDirective* ingest)
 
 string SrsConfig::get_ingest_input_url(SrsConfDirective* ingest)
 {
+    if (!ingest) {
+        return "";
+    }
+    
     SrsConfDirective* conf = ingest->get("input");
     
     if (!conf) {
@@ -2398,34 +2774,16 @@ string SrsConfig::get_ingest_input_url(SrsConfDirective* ingest)
     return conf->arg0();
 }
 
-string SrsConfig::get_log_file()
+bool SrsConfig::get_log_tank_file()
 {
     srs_assert(root);
     
-    SrsConfDirective* conf = root->get("srs_log_file");
-    if (!conf || conf->arg0().empty()) {
-        return "./objs/srs.log";
+    SrsConfDirective* conf = root->get("srs_log_tank");
+    if (conf && conf->arg0() == SRS_CONF_DEFAULT_LOG_TANK_CONSOLE) {
+        return false;
     }
     
-    return conf->arg0();
-}
-
-bool SrsConfig::get_ffmpeg_log_enabled()
-{
-    string log = get_ffmpeg_log_dir();
-    return log != "/dev/null";
-}
-
-string SrsConfig::get_ffmpeg_log_dir()
-{
-    srs_assert(root);
-    
-    SrsConfDirective* conf = root->get("ff_log_dir");
-    if (!conf || conf->arg0().empty()) {
-        return "./objs";
-    }
-    
-    return conf->arg0();
+    return true;
 }
 
 string SrsConfig::get_log_level()
@@ -2434,22 +2792,40 @@ string SrsConfig::get_log_level()
     
     SrsConfDirective* conf = root->get("srs_log_level");
     if (!conf || conf->arg0().empty()) {
-        return "trace";
+        return SRS_CONF_DEFAULT_LOG_LEVEL;
     }
     
     return conf->arg0();
 }
 
-bool SrsConfig::get_log_tank_file()
+string SrsConfig::get_log_file()
 {
     srs_assert(root);
     
-    SrsConfDirective* conf = root->get("srs_log_tank");
-    if (conf && conf->arg0() == "console") {
-        return false;
+    SrsConfDirective* conf = root->get("srs_log_file");
+    if (!conf || conf->arg0().empty()) {
+        return SRS_CONF_DEFAULT_LOG_FILE;
     }
     
-    return true;
+    return conf->arg0();
+}
+
+bool SrsConfig::get_ffmpeg_log_enabled()
+{
+    string log = get_ffmpeg_log_dir();
+    return log != SRS_CONSTS_NULL_FILE;
+}
+
+string SrsConfig::get_ffmpeg_log_dir()
+{
+    srs_assert(root);
+    
+    SrsConfDirective* conf = root->get("ff_log_dir");
+    if (!conf || conf->arg0().empty()) {
+        return SRS_CONF_DEFAULT_FF_LOG_DIR;
+    }
+    
+    return conf->arg0();
 }
 
 SrsConfDirective* SrsConfig::get_hls(string vhost)
@@ -2535,6 +2911,23 @@ double SrsConfig::get_hls_window(string vhost)
     return ::atof(conf->arg0().c_str());
 }
 
+string SrsConfig::get_hls_on_error(string vhost)
+{
+    SrsConfDirective* hls = get_hls(vhost);
+    
+    if (!hls) {
+        return SRS_CONF_DEFAULT_HLS_ON_ERROR;
+    }
+    
+    SrsConfDirective* conf = hls->get("hls_on_error");
+    
+    if (!conf) {
+        return SRS_CONF_DEFAULT_HLS_ON_ERROR;
+    }
+
+    return conf->arg0();
+}
+
 SrsConfDirective* SrsConfig::get_dvr(string vhost)
 {
     SrsConfDirective* conf = get_vhost(vhost);
@@ -2618,15 +3011,49 @@ int SrsConfig::get_dvr_duration(string vhost)
     return ::atoi(conf->arg0().c_str());
 }
 
-SrsConfDirective* SrsConfig::get_http_api()
+bool SrsConfig::get_dvr_wait_keyframe(string vhost)
 {
-    return root->get("http_api");
+    SrsConfDirective* dvr = get_dvr(vhost);
+    
+    if (!dvr) {
+        return true;
+    }
+    
+    SrsConfDirective* conf = dvr->get("dvr_wait_keyframe");
+    
+    if (!conf || conf->arg0() != "off") {
+        return true;
+    }
+    
+    return false;
+}
+
+int SrsConfig::get_dvr_time_jitter(string vhost)
+{
+    SrsConfDirective* dvr = get_dvr(vhost);
+    
+    std::string time_jitter = SRS_CONF_DEFAULT_TIME_JITTER;
+    
+    if (dvr) {
+        SrsConfDirective* conf = dvr->get("time_jitter");
+    
+        if (conf) {
+            time_jitter = conf->arg0();
+        }
+    }
+    
+    return _srs_time_jitter_string2int(time_jitter);
 }
 
 bool SrsConfig::get_http_api_enabled()
 {
     SrsConfDirective* conf = get_http_api();
     return get_http_api_enabled(conf);
+}
+
+SrsConfDirective* SrsConfig::get_http_api()
+{
+    return root->get("http_api");
 }
 
 bool SrsConfig::get_http_api_enabled(SrsConfDirective* conf)
@@ -2659,15 +3086,15 @@ int SrsConfig::get_http_api_listen()
     return ::atoi(conf->arg0().c_str());
 }
 
-SrsConfDirective* SrsConfig::get_http_stream()
-{
-    return root->get("http_stream");
-}
-
 bool SrsConfig::get_http_stream_enabled()
 {
     SrsConfDirective* conf = get_http_stream();
     return get_http_stream_enabled(conf);
+}
+
+SrsConfDirective* SrsConfig::get_http_stream()
+{
+    return root->get("http_stream");
 }
 
 bool SrsConfig::get_http_stream_enabled(SrsConfDirective* conf)
@@ -2851,6 +3278,111 @@ string SrsConfig::get_heartbeat_device_id()
     return conf->arg0();
 }
 
+bool SrsConfig::get_heartbeat_summaries()
+{
+    SrsConfDirective* conf = get_heartbeart();
+    
+    if (!conf) {
+        return SRS_CONF_DEFAULT_HTTP_HEAETBEAT_SUMMARIES;
+    }
+    
+    conf = conf->get("summaries");
+    if (!conf || conf->arg0() != "on") {
+        return SRS_CONF_DEFAULT_HTTP_HEAETBEAT_SUMMARIES;
+    }
+    
+    return true;
+}
+
+SrsConfDirective* SrsConfig::get_stats()
+{
+    return root->get("stats");
+}
+
+int SrsConfig::get_stats_network()
+{
+    SrsConfDirective* conf = get_stats();
+    
+    if (!conf) {
+        return SRS_CONF_DEFAULT_STATS_NETWORK_DEVICE_INDEX;
+    }
+    
+    conf = conf->get("network");
+    if (!conf || conf->arg0().empty()) {
+        return SRS_CONF_DEFAULT_STATS_NETWORK_DEVICE_INDEX;
+    }
+    
+    return ::atoi(conf->arg0().c_str());
+}
+
+SrsConfDirective* SrsConfig::get_stats_disk_device()
+{
+    SrsConfDirective* conf = get_stats();
+    
+    if (!conf) {
+        return NULL;
+    }
+    
+    conf = conf->get("disk");
+    if (!conf || conf->args.size() == 0) {
+        return NULL;
+    }
+    
+    return conf;
+}
+
+namespace _srs_internal
+{
+    SrsConfigBuffer::SrsConfigBuffer()
+    {
+        line = 1;
+    
+        pos = last = start = NULL;
+        end = start;
+    }
+    
+    SrsConfigBuffer::~SrsConfigBuffer()
+    {
+        srs_freep(start);
+    }
+    
+    int SrsConfigBuffer::fullfill(const char* filename)
+    {
+        int ret = ERROR_SUCCESS;
+        
+        SrsFileReader reader;
+        
+        // open file reader.
+        if ((ret = reader.open(filename)) != ERROR_SUCCESS) {
+            srs_error("open conf file error. ret=%d", ret);
+            return ret;
+        }
+        
+        // read all.
+        int filesize = (int)reader.filesize();
+        
+        // create buffer
+        srs_freep(start);
+        pos = last = start = new char[filesize];
+        end = start + filesize;
+        
+        // read total content from file.
+        ssize_t nread = 0;
+        if ((ret = reader.read(start, filesize, &nread)) != ERROR_SUCCESS) {
+            srs_error("read file read error. expect %d, actual %d bytes, ret=%d", 
+                filesize, nread, ret);
+            return ret;
+        }
+        
+        return ret;
+    }
+    
+    bool SrsConfigBuffer::empty()
+    {
+        return pos >= end;
+    }
+};
+
 bool srs_directive_equals(SrsConfDirective* a, SrsConfDirective* b)
 {
     // both NULL, equal.
@@ -2891,3 +3423,4 @@ bool srs_directive_equals(SrsConfDirective* a, SrsConfDirective* b)
     
     return true;
 }
+

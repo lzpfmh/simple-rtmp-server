@@ -36,7 +36,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 * when reload callback, the config is updated yet.
 * 
 * features not support reload, 
-* @see: https://github.com/winlinvip/simple-rtmp-server/wiki/Reload#notsupportedfeatures
+* @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_Reload#notsupportedfeatures
 */
 class ISrsReloadHandler
 {
@@ -61,6 +61,7 @@ public:
     virtual int on_reload_vhost_atc(std::string vhost);
     virtual int on_reload_vhost_gop_cache(std::string vhost);
     virtual int on_reload_vhost_queue_length(std::string vhost);
+    virtual int on_reload_vhost_time_jitter(std::string vhost);
     virtual int on_reload_vhost_forward(std::string vhost);
     virtual int on_reload_vhost_hls(std::string vhost);
     virtual int on_reload_vhost_dvr(std::string vhost);

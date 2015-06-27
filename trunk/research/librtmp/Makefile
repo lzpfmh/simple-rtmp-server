@@ -3,7 +3,10 @@ GCC = gcc
 ifeq ($(HANDSHAKE),)
     ST_ALL      = help
 else
-    ST_ALL      = srs_flv_parser srs_flv_injecter srs_publish srs_play srs_ingest_flv srs_ingest_rtmp srs_detect_rtmp
+    ST_ALL      = objs/srs_flv_parser \
+                objs/srs_flv_injecter objs/srs_publish objs/srs_play \
+                objs/srs_ingest_flv objs/srs_ingest_rtmp objs/srs_detect_rtmp \
+                objs/srs_bandwidth_check
 endif
 
 .PHONY: default clean help ssl nossl
@@ -24,15 +27,16 @@ help:
 	@echo "     srs_ingest_flv          ingest flv file and publish to RTMP server."
 	@echo "     srs_ingest_rtmp         ingest RTMP and publish to RTMP server."
 	@echo "     srs_detect_rtmp         detect RTMP stream info."
+	@echo "     srs_bandwidth_check     bandwidth check/test tool."
 	@echo "Remark: about simple/complex handshake, see: http://blog.csdn.net/win_lin/article/details/13006803"
 	@echo "Remark: srs Makefile will auto invoke this by --with/without-ssl, "
 	@echo "     that is, if user specified ssl(by --with-ssl), srs will make this by 'make ssl'"
 	@echo "     that is, if user not use ssl(by --without-ssl), use 'make nossl'"
-	@echo "     see: https://github.com/winlinvip/simple-rtmp-server/wiki/Build"
+	@echo "     see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_v1_Build"
 	@echo "Remark: before make this sample, user must make the srs, with/without ssl"
     
 clean:
-	@rm -f srs_flv_parser srs_flv_injecter srs_publish srs_play srs_ingest_flv srs_ingest_rtmp srs_detect_rtmp
+	@rm -rf objs
 
 # srs library root
 SRS_OBJS = ../../objs
@@ -62,27 +66,32 @@ ifeq ($(HANDSHAKE), SSL)
 endif
 
 ssl:
+	@mkdir -p objs
 	$(MAKE) HANDSHAKE="SSL"
 nossl:
+	@mkdir -p objs
 	$(MAKE) HANDSHAKE="NOSSL"
 
-srs_flv_parser: srs_flv_parser.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L)
-	$(GCC) srs_flv_parser.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o srs_flv_parser
+objs/srs_flv_parser: srs_flv_parser.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L)
+	$(GCC) srs_flv_parser.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o objs/srs_flv_parser
 
-srs_flv_injecter: srs_flv_injecter.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L)
-	$(GCC) srs_flv_injecter.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o srs_flv_injecter
+objs/srs_flv_injecter: srs_flv_injecter.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L)
+	$(GCC) srs_flv_injecter.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o objs/srs_flv_injecter
 
-srs_publish: srs_publish.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L)
-	$(GCC) srs_publish.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o srs_publish
+objs/srs_publish: srs_publish.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L)
+	$(GCC) srs_publish.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o objs/srs_publish
 
-srs_play: srs_play.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L)
-	$(GCC) srs_play.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o srs_play
+objs/srs_play: srs_play.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L)
+	$(GCC) srs_play.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o objs/srs_play
 
-srs_ingest_flv: srs_ingest_flv.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L)
-	$(GCC) srs_ingest_flv.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o srs_ingest_flv
+objs/srs_ingest_flv: srs_ingest_flv.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L)
+	$(GCC) srs_ingest_flv.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o objs/srs_ingest_flv
 
-srs_ingest_rtmp: srs_ingest_rtmp.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L)
-	$(GCC) srs_ingest_rtmp.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o srs_ingest_rtmp
+objs/srs_ingest_rtmp: srs_ingest_rtmp.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L)
+	$(GCC) srs_ingest_rtmp.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o objs/srs_ingest_rtmp
 
-srs_detect_rtmp: srs_detect_rtmp.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L)
-	$(GCC) srs_detect_rtmp.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o srs_detect_rtmp
+objs/srs_detect_rtmp: srs_detect_rtmp.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L)
+	$(GCC) srs_detect_rtmp.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o objs/srs_detect_rtmp
+
+objs/srs_bandwidth_check: srs_bandwidth_check.c $(SRS_RESEARCH_DEPS) $(SRS_LIBRTMP_I) $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L)
+	$(GCC) srs_bandwidth_check.c $(SRS_LIBRTMP_L) $(SRS_LIBSSL_L) $(EXTRA_CXX_FLAG) -o objs/srs_bandwidth_check

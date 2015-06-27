@@ -40,7 +40,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <srs_kernel_utility.hpp>
 #include <srs_app_http_api.hpp>
 #include <srs_app_http_conn.hpp>
-#include <srs_app_http.hpp>
 #include <srs_app_ingest.hpp>
 #include <srs_app_source.hpp>
 #include <srs_app_utility.hpp>
@@ -60,15 +59,24 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 // update time interval:
 //      SRS_SYS_CYCLE_INTERVAL * SRS_SYS_TIME_RESOLUTION_MS_TIMES
+// @see SYS_TIME_RESOLUTION_US
 #define SRS_SYS_TIME_RESOLUTION_MS_TIMES 3
 
 // update rusage interval:
 //      SRS_SYS_CYCLE_INTERVAL * SRS_SYS_RUSAGE_RESOLUTION_TIMES
 #define SRS_SYS_RUSAGE_RESOLUTION_TIMES 30
 
+// update network devices info interval:
+//      SRS_SYS_CYCLE_INTERVAL * SRS_SYS_NETWORK_RTMP_SERVER_RESOLUTION_TIMES
+#define SRS_SYS_NETWORK_RTMP_SERVER_RESOLUTION_TIMES 30
+
 // update rusage interval:
 //      SRS_SYS_CYCLE_INTERVAL * SRS_SYS_CPU_STAT_RESOLUTION_TIMES
 #define SRS_SYS_CPU_STAT_RESOLUTION_TIMES 30
+
+// update the disk iops interval:
+//      SRS_SYS_CYCLE_INTERVAL * SRS_SYS_DISK_STAT_RESOLUTION_TIMES
+#define SRS_SYS_DISK_STAT_RESOLUTION_TIMES 60
 
 // update rusage interval:
 //      SRS_SYS_CYCLE_INTERVAL * SRS_SYS_MEMINFO_RESOLUTION_TIMES
@@ -77,6 +85,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 // update platform info interval:
 //      SRS_SYS_CYCLE_INTERVAL * SRS_SYS_PLATFORM_INFO_RESOLUTION_TIMES
 #define SRS_SYS_PLATFORM_INFO_RESOLUTION_TIMES 90
+
+// update network devices info interval:
+//      SRS_SYS_CYCLE_INTERVAL * SRS_SYS_NETWORK_DEVICE_RESOLUTION_TIMES
+#define SRS_SYS_NETWORK_DEVICE_RESOLUTION_TIMES 90
 
 SrsListener::SrsListener(SrsServer* server, SrsListenerType type)
 {
@@ -308,7 +320,8 @@ SrsServer::SrsServer()
     signal_gmc_stop = false;
     pid_fd = -1;
     
-    signal_manager = new SrsSignalManager(this);
+    signal_manager = NULL;
+    kbps = NULL;
     
     // donot new object in constructor,
     // for some global instance is not ready now,
@@ -368,31 +381,35 @@ void SrsServer::destroy()
     }
     
     srs_freep(signal_manager);
+    srs_freep(kbps);
     
-    for (std::vector<SrsConnection*>::iterator it = conns.begin(); it != conns.end();) {
-        SrsConnection* conn = *it;
+    // @remark never destroy the connections, 
+    // for it's still alive.
 
-        // remove the connection, then free it,
-        // for the free will remove itself from server,
-        // when erased here, the remove of server will ignore.
-        it = conns.erase(it);
-
-        srs_freep(conn);
-    }
-    conns.clear();
-
-    SrsSource::destroy();
+    // @remark never destroy the source, 
+    // when we free all sources, the fmle publish may retry
+    // and segment fault.
 }
 
 int SrsServer::initialize()
 {
     int ret = ERROR_SUCCESS;
     
+    // ensure the time is ok.
+    srs_update_system_time_ms();
+    
     // for the main objects(server, config, log, context),
     // never subscribe handler in constructor,
     // instead, subscribe handler in initialize method.
     srs_assert(_srs_config);
     _srs_config->subscribe(this);
+    
+    srs_assert(!signal_manager);
+    signal_manager = new SrsSignalManager(this);
+    
+    srs_assert(!kbps);
+    kbps = new SrsKbps();
+    kbps->set_io(NULL, NULL);
     
 #ifdef SRS_AUTO_HTTP_API
     srs_assert(!http_api_handler);
@@ -450,7 +467,7 @@ int SrsServer::acquire_pid_file()
     }
     
     // require write lock
-    flock lock;
+    struct flock lock;
 
     lock.l_type = F_WRLCK; // F_RDLCK, F_WRLCK, F_UNLCK
     lock.l_start = 0; // type offset, relative to l_whence
@@ -511,20 +528,22 @@ int SrsServer::initialize_st()
 {
     int ret = ERROR_SUCCESS;
     
-    // use linux epoll.
-    if (st_set_eventsys(ST_EVENTSYS_ALT) == -1) {
-        ret = ERROR_ST_SET_EPOLL;
-        srs_error("st_set_eventsys use linux epoll failed. ret=%d", ret);
+    // init st
+    if ((ret = srs_init_st()) != ERROR_SUCCESS) {
+        srs_error("init st failed. ret=%d", ret);
         return ret;
     }
-    srs_verbose("st_set_eventsys use linux epoll success");
     
-    if(st_init() != 0){
-        ret = ERROR_ST_INITIALIZE;
-        srs_error("st_init failed. ret=%d", ret);
+    // @remark, st alloc segment use mmap, which only support 32757 threads,
+    // if need to support more, for instance, 100k threads, define the macro MALLOC_STACK.
+    // TODO: FIXME: maybe can use "sysctl vm.max_map_count" to refine.
+    if (_srs_config->get_max_connections() > 32756) {
+        ret = ERROR_ST_EXCEED_THREADS;
+        srs_error("st mmap for stack allocation must <= %d threads, "
+            "@see Makefile of st for MALLOC_STACK, please build st manually by "
+            "\"make EXTRA_CFLAGS=-DMALLOC_STACK linux-debug\", ret=%d", ret);
         return ret;
     }
-    srs_verbose("st_init success");
     
     // set current log id.
     _srs_context->generate_id();
@@ -581,6 +600,7 @@ int SrsServer::cycle()
 #ifdef SRS_AUTO_GPERF_MC
     destroy();
     
+    // remark, for gmc, never invoke the exit().
     srs_warn("sleep a long time for system st-threads to cleanup.");
     st_usleep(3 * 1000 * 1000);
     srs_warn("system quit");
@@ -605,6 +625,9 @@ void SrsServer::remove(SrsConnection* conn)
     conns.erase(it);
     
     srs_info("conn removed. conns=%d", (int)conns.size());
+    
+    // resample the resource of specified connection.
+    resample_kbps(conn);
     
     // all connections are created by server,
     // so we free it here.
@@ -642,21 +665,27 @@ int SrsServer::do_cycle()
     
     // find the max loop
     int max = srs_max(0, SRS_SYS_TIME_RESOLUTION_MS_TIMES);
+    
+#ifdef SRS_AUTO_STAT
     max = srs_max(max, SRS_SYS_RUSAGE_RESOLUTION_TIMES);
     max = srs_max(max, SRS_SYS_CPU_STAT_RESOLUTION_TIMES);
+    max = srs_max(max, SRS_SYS_DISK_STAT_RESOLUTION_TIMES);
     max = srs_max(max, SRS_SYS_MEMINFO_RESOLUTION_TIMES);
     max = srs_max(max, SRS_SYS_PLATFORM_INFO_RESOLUTION_TIMES);
+    max = srs_max(max, SRS_SYS_NETWORK_DEVICE_RESOLUTION_TIMES);
+    max = srs_max(max, SRS_SYS_NETWORK_RTMP_SERVER_RESOLUTION_TIMES);
+#endif
     
     // the deamon thread, update the time cache
     while (true) {
         // the interval in config.
-        int64_t heartbeat_max_resolution = _srs_config->get_heartbeat_interval() / 100;
+        int heartbeat_max_resolution = (int)(_srs_config->get_heartbeat_interval() / SRS_SYS_CYCLE_INTERVAL);
         
         // dynamic fetch the max.
         int __max = max;
         __max = srs_max(__max, heartbeat_max_resolution);
         
-        for (int i = 1; i < __max + 1; i++) {
+        for (int i = 0; i < __max; i++) {
             st_usleep(SRS_SYS_CYCLE_INTERVAL * 1000);
         
 // for gperf heap checker,
@@ -684,27 +713,50 @@ int SrsServer::do_cycle()
             
             // update the cache time or rusage.
             if ((i % SRS_SYS_TIME_RESOLUTION_MS_TIMES) == 0) {
+                srs_info("update current time cache.");
                 srs_update_system_time_ms();
             }
+            
+#ifdef SRS_AUTO_STAT
             if ((i % SRS_SYS_RUSAGE_RESOLUTION_TIMES) == 0) {
+                srs_info("update resource info, rss.");
                 srs_update_system_rusage();
             }
             if ((i % SRS_SYS_CPU_STAT_RESOLUTION_TIMES) == 0) {
+                srs_info("update cpu info, cpu usage.");
                 srs_update_proc_stat();
             }
+            if ((i % SRS_SYS_DISK_STAT_RESOLUTION_TIMES) == 0) {
+                srs_info("update disk info, disk iops.");
+                srs_update_disk_stat();
+            }
             if ((i % SRS_SYS_MEMINFO_RESOLUTION_TIMES) == 0) {
+                srs_info("update memory info, usage/free.");
                 srs_update_meminfo();
             }
             if ((i % SRS_SYS_PLATFORM_INFO_RESOLUTION_TIMES) == 0) {
+                srs_info("update platform info, uptime/load.");
                 srs_update_platform_info();
             }
-#ifdef SRS_AUTO_HTTP_PARSER
+            if ((i % SRS_SYS_NETWORK_DEVICE_RESOLUTION_TIMES) == 0) {
+                srs_info("update network devices info.");
+                srs_update_network_devices();
+            }
+            if ((i % SRS_SYS_NETWORK_RTMP_SERVER_RESOLUTION_TIMES) == 0) {
+                srs_info("update network rtmp server info.");
+                resample_kbps(NULL);
+                srs_update_rtmp_server((int)conns.size(), kbps);
+            }
+    #ifdef SRS_AUTO_HTTP_PARSER
             if (_srs_config->get_heartbeat_enabled()) {
                 if ((i % heartbeat_max_resolution) == 0) {
+                    srs_info("do http heartbeat, for internal server to report.");
                     http_heartbeat->heartbeat();
                 }
             }
+    #endif
 #endif
+            srs_info("server main thread loop");
         }
     }
 
@@ -716,16 +768,16 @@ int SrsServer::listen_rtmp()
     int ret = ERROR_SUCCESS;
     
     // stream service port.
-    SrsConfDirective* conf = _srs_config->get_listen();
-    srs_assert(conf);
+    std::vector<std::string> ports = _srs_config->get_listen();
+    srs_assert((int)ports.size() > 0);
     
     close_listeners(SrsListenerRtmpStream);
     
-    for (int i = 0; i < (int)conf->args.size(); i++) {
+    for (int i = 0; i < (int)ports.size(); i++) {
         SrsListener* listener = new SrsListener(this, SrsListenerRtmpStream);
         listeners.push_back(listener);
         
-        int port = ::atoi(conf->args.at(i).c_str());
+        int port = ::atoi(ports[i].c_str());
         if ((ret = listener->listen(port)) != ERROR_SUCCESS) {
             srs_error("RTMP stream listen at port %d failed. ret=%d", port, ret);
             return ret;
@@ -793,6 +845,33 @@ void SrsServer::close_listeners(SrsListenerType type)
     }
 }
 
+void SrsServer::resample_kbps(SrsConnection* conn, bool do_resample)
+{
+    // resample all when conn is NULL.
+    if (!conn) {
+        for (std::vector<SrsConnection*>::iterator it = conns.begin(); it != conns.end(); ++it) {
+            SrsConnection* client = *it;
+            srs_assert(client);
+            
+            // only resample, do resample when all finished.
+            resample_kbps(client, false);
+        }
+        
+        kbps->sample();
+        return;
+    }
+    
+    // resample for connection.
+    conn->kbps_resample();
+    
+    kbps->add_delta(conn);
+    
+    // resample for server.
+    if (do_resample) {
+        kbps->sample();
+    }
+}
+
 int SrsServer::accept_client(SrsListenerType type, st_netfd_t client_stfd)
 {
     int ret = ERROR_SUCCESS;
@@ -838,10 +917,11 @@ int SrsServer::accept_client(SrsListenerType type, st_netfd_t client_stfd)
     srs_verbose("add conn to vector.");
     
     // cycle will start process thread and when finished remove the client.
+    // @remark never use the conn, for it maybe destroyed.
     if ((ret = conn->start()) != ERROR_SUCCESS) {
         return ret;
     }
-    srs_verbose("conn started success   .");
+    srs_verbose("conn started success.");
 
     srs_verbose("accept client finished. conns=%d, ret=%d", (int)conns.size(), ret);
     
@@ -880,7 +960,7 @@ int SrsServer::on_reload_vhost_added(std::string vhost)
     return ret;
 }
 
-int SrsServer::on_reload_vhost_removed(std::string vhost)
+int SrsServer::on_reload_vhost_removed(std::string /*vhost*/)
 {
     int ret = ERROR_SUCCESS;
     
@@ -969,3 +1049,4 @@ int SrsServer::on_reload_http_stream_updated()
     
     return ret;
 }
+

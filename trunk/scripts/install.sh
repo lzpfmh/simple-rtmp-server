@@ -108,8 +108,9 @@ else
 fi
 
 echo ""
-echo "see: https://github.com/winlinvip/simple-rtmp-server/wiki/LinuxService"
+echo "see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_LinuxService"
 echo "install success, you can:"
 echo -e "${GREEN}      sudo /etc/init.d/srs start${BLACK}"
+echo "srs root is ${INSTALL}"
 
 exit 0

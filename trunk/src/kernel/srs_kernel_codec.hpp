@@ -36,7 +36,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //     1 = AAC raw
 enum SrsCodecAudioType
 {
-    SrsCodecAudioTypeReserved                        = -1,
+    // set to the max value to reserved, for array map.
+    SrsCodecAudioTypeReserved                        = 2,
+    
     SrsCodecAudioTypeSequenceHeader                 = 0,
     SrsCodecAudioTypeRawData                         = 1,
 };
@@ -51,7 +53,9 @@ enum SrsCodecAudioType
 //     5 = video info/command frame
 enum SrsCodecVideoAVCFrame
 {
+    // set to the max value to reserved, for array map.
     SrsCodecVideoAVCFrameReserved                    = 0,
+    SrsCodecVideoAVCFrameReserved1                    = 6,
     
     SrsCodecVideoAVCFrameKeyFrame                     = 1,
     SrsCodecVideoAVCFrameInterFrame                 = 2,
@@ -68,7 +72,8 @@ enum SrsCodecVideoAVCFrame
 //         not required or supported)
 enum SrsCodecVideoAVCType
 {
-    SrsCodecVideoAVCTypeReserved                    = -1,
+    // set to the max value to reserved, for array map.
+    SrsCodecVideoAVCTypeReserved                    = 3,
     
     SrsCodecVideoAVCTypeSequenceHeader                 = 0,
     SrsCodecVideoAVCTypeNALU                         = 1,
@@ -86,7 +91,10 @@ enum SrsCodecVideoAVCType
 //     7 = AVC
 enum SrsCodecVideo
 {
+    // set to the max value to reserved, for array map.
     SrsCodecVideoReserved                = 0,
+    SrsCodecVideoReserved1                = 1,
+    SrsCodecVideoReserved2                = 8,
     
     SrsCodecVideoSorensonH263             = 2,
     SrsCodecVideoScreenVideo             = 3,
@@ -117,6 +125,9 @@ enum SrsCodecVideo
 // Speex is supported in Flash Player 10 and higher.
 enum SrsCodecAudio
 {
+    // set to the max value to reserved, for array map.
+    SrsCodecAudioReserved1                = 16,
+    
     SrsCodecAudioLinearPCMPlatformEndian             = 0,
     SrsCodecAudioADPCM                                 = 1,
     SrsCodecAudioMP3                                 = 2,
@@ -147,24 +158,23 @@ public:
     /**
     * only check the frame_type, not check the codec type.
     */
-    static bool video_is_keyframe(int8_t* data, int size);
+    static bool video_is_keyframe(char* data, int size);
     /**
     * check codec h264, keyframe, sequence header
     */
-    static bool video_is_sequence_header(int8_t* data, int size);
+    static bool video_is_sequence_header(char* data, int size);
     /**
     * check codec aac, sequence header
     */
-    static bool audio_is_sequence_header(int8_t* data, int size);
+    static bool audio_is_sequence_header(char* data, int size);
     /**
     * check codec h264.
     */
-    static bool video_is_h264(int8_t* data, int size);
-private:
+    static bool video_is_h264(char* data, int size);
     /**
     * check codec aac.
     */
-    static bool audio_is_aac(int8_t* data, int size);
+    static bool audio_is_aac(char* data, int size);
 };
 
 #endif

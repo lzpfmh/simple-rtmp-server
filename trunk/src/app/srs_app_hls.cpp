@@ -23,6 +23,28 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <srs_app_hls.hpp>
 
+/**
+* the public data, event HLS disable, others can use it.
+*/
+// 0 = 5.5 kHz = 5512 Hz
+// 1 = 11 kHz = 11025 Hz
+// 2 = 22 kHz = 22050 Hz
+// 3 = 44 kHz = 44100 Hz
+int flv_sample_rates[] = {5512, 11025, 22050, 44100};
+
+// the sample rates in the codec,
+// in the sequence header.
+int aac_sample_rates[] = 
+{
+    96000, 88200, 64000, 48000,
+    44100, 32000, 24000, 22050,
+    16000, 12000, 11025,  8000,
+    7350,     0,     0,    0
+};
+
+/**
+* the HLS section, only available when HLS enabled.
+*/
 #ifdef SRS_AUTO_HLS
 
 #include <sys/types.h>
@@ -37,7 +59,7 @@ using namespace std;
 #include <srs_kernel_error.hpp>
 #include <srs_kernel_codec.hpp>
 #include <srs_protocol_amf0.hpp>
-#include <srs_protocol_rtmp_stack.hpp>
+#include <srs_protocol_stack.hpp>
 #include <srs_app_config.hpp>
 #include <srs_app_source.hpp>
 #include <srs_core_autofree.hpp>
@@ -45,6 +67,8 @@ using namespace std;
 #include <srs_app_pithy_print.hpp>
 #include <srs_kernel_utility.hpp>
 #include <srs_app_avc_aac.hpp>
+#include <srs_kernel_file.hpp>
+#include <srs_kernel_buffer.hpp>
 
 // max PES packets size to flush the video.
 #define SRS_AUTO_HLS_AUDIO_CACHE_SIZE 1024 * 1024
@@ -54,7 +78,9 @@ using namespace std;
 
 // @see: NGX_RTMP_HLS_DELAY, 
 // 63000: 700ms, ts_tbn=90000
-#define SRS_AUTO_HLS_DELAY 63000
+// 72000: 800ms, ts_tbn=90000
+// @see https://github.com/simple-rtmp-server/srs/issues/151#issuecomment-71352511
+#define SRS_AUTO_HLS_DELAY 72000
 
 // the mpegts header specifed the video/audio pid.
 #define TS_VIDEO_PID 256
@@ -64,6 +90,16 @@ using namespace std;
 #define TS_AUDIO_AAC 0xc0
 // ts avc stream id.
 #define TS_VIDEO_AVC 0xe0
+
+// @see: ngx_rtmp_hls_audio
+/* We assume here AAC frame size is 1024
+ * Need to handle AAC frames with frame size of 960 */
+#define _SRS_AAC_SAMPLE_SIZE 1024
+
+// in ms, for HLS aac sync time.
+#define SRS_CONF_DEFAULT_AAC_SYNC 100
+// in ms, for HLS aac flush the audio
+#define SRS_CONF_DEFAULT_AAC_DELAY 100
 
 // @see: ngx_rtmp_mpegts_header
 u_int8_t mpegts_header[] = {
@@ -101,6 +137,8 @@ u_int8_t mpegts_header[] = {
     /* PMT */
     0xe1, 0x00,
     0xf0, 0x00,
+    // must generate header with/without video, @see:
+    // https://github.com/simple-rtmp-server/srs/issues/40
     0x1b, 0xe1, 0x00, 0xf0, 0x00, /* h264, pid=0x100=256 */
     0x0f, 0xe1, 0x01, 0xf0, 0x00, /* aac, pid=0x101=257 */
     /*0x03, 0xe1, 0x01, 0xf0, 0x00,*/ /* mp3 */
@@ -150,12 +188,11 @@ public:
 class SrsMpegtsWriter
 {
 public:
-    static int write_header(int fd)
+    static int write_header(SrsFileWriter* writer)
     {
         int ret = ERROR_SUCCESS;
         
-        // TODO: FIXME: maybe should use st_write.
-        if (::write(fd, mpegts_header, sizeof(mpegts_header)) != sizeof(mpegts_header)) {
+        if ((ret = writer->write(mpegts_header, sizeof(mpegts_header), NULL)) != ERROR_SUCCESS) {
             ret = ERROR_HLS_WRITE_FAILED;
             srs_error("write ts file header failed. ret=%d", ret);
             return ret;
@@ -163,16 +200,16 @@ public:
 
         return ret;
     }
-    static int write_frame(int fd, SrsMpegtsFrame* frame, SrsCodecBuffer* buffer)
+    static int write_frame(SrsFileWriter* writer, SrsMpegtsFrame* frame, SrsBuffer* buffer)
     {
         int ret = ERROR_SUCCESS;
         
-        if (!buffer->bytes || buffer->size <= 0) {
+        if (!buffer->bytes() || buffer->length() <= 0) {
             return ret;
         }
         
-        char* last = buffer->bytes + buffer->size;
-        char* pos = buffer->bytes;
+        char* last = buffer->bytes() + buffer->length();
+        char* pos = buffer->bytes();
         
         bool first = true;
         while (pos < last) {
@@ -202,7 +239,8 @@ public:
                     p[-1] |= 0x20; // Both Adaption and Payload
                     *p++ = 7;    // size
                     *p++ = 0x50; // random access + PCR
-                    p = write_pcr(p, frame->dts - SRS_AUTO_HLS_DELAY);
+                    // about the pcr, read https://github.com/simple-rtmp-server/srs/issues/151#issuecomment-71352511
+                    p = write_pcr(p, frame->dts);
                 }
                 
                 // PES header
@@ -279,8 +317,7 @@ public:
             }
             
             // write ts packet
-            // TODO: FIXME: maybe should use st_write.
-            if (::write(fd, packet, sizeof(packet)) != sizeof(packet)) {
+            if ((ret = writer->write(packet, sizeof(packet), NULL)) != ERROR_SUCCESS) {
                 ret = ERROR_HLS_WRITE_FAILED;
                 srs_error("write ts file failed. ret=%d", ret);
                 return ret;
@@ -334,11 +371,18 @@ private:
     }
     static char* write_pcr(char* p, int64_t pcr)
     {
-        *p++ = (char) (pcr >> 25);
-        *p++ = (char) (pcr >> 17);
-        *p++ = (char) (pcr >> 9);
-        *p++ = (char) (pcr >> 1);
-        *p++ = (char) (pcr << 7 | 0x7e);
+        // the pcr=dts-delay, where dts = frame->dts + delay
+        // and the pcr should never be negative
+        // @see https://github.com/simple-rtmp-server/srs/issues/268
+        srs_assert(pcr >= 0);
+        
+        int64_t v = pcr;
+        
+        *p++ = (char) (v >> 25);
+        *p++ = (char) (v >> 17);
+        *p++ = (char) (v >> 9);
+        *p++ = (char) (v >> 1);
+        *p++ = (char) (v << 7 | 0x7e);
         *p++ = 0;
     
         return p;
@@ -366,14 +410,15 @@ SrsHlsAacJitter::~SrsHlsAacJitter()
 {
 }
 
-int64_t SrsHlsAacJitter::on_buffer_start(int64_t flv_pts, int sample_rate)
+int64_t SrsHlsAacJitter::on_buffer_start(int64_t flv_pts, int sample_rate, int aac_sample_rate)
 {
-    // 0 = 5.5 kHz = 5512 Hz
-    // 1 = 11 kHz = 11025 Hz
-    // 2 = 22 kHz = 22050 Hz
-    // 3 = 44 kHz = 44100 Hz
-    static int flv_sample_rates[] = {5512, 11025, 22050, 44100};
+    // use sample rate in flv/RTMP.
     int flv_sample_rate = flv_sample_rates[sample_rate & 0x03];
+
+    // override the sample rate by sequence header
+    if (aac_sample_rate != __SRS_AAC_SAMPLE_RATE_UNSET) {
+        flv_sample_rate = aac_sample_rates[aac_sample_rate];
+    }
 
     // sync time set to 0, donot adjust the aac timestamp.
     if (!sync_ms) {
@@ -381,9 +426,12 @@ int64_t SrsHlsAacJitter::on_buffer_start(int64_t flv_pts, int sample_rate)
     }
     
     // @see: ngx_rtmp_hls_audio
-    /* TODO: We assume here AAC frame size is 1024
-     *       Need to handle AAC frames with frame size of 960 */
-    int64_t est_pts = base_pts + nb_samples * 90000LL * 1024LL / flv_sample_rate;
+    // drop the rtmp audio packet timestamp, re-calc it by sample rate.
+    // 
+    // resample for the tbn of ts is 90000, flv is 1000,
+    // we will lost timestamp if use audio packet timestamp,
+    // so we must resample. or audio will corupt in IOS.
+    int64_t est_pts = base_pts + nb_samples * 90000LL * _SRS_AAC_SAMPLE_SIZE / flv_sample_rate;
     int64_t dpts = (int64_t) (est_pts - flv_pts);
 
     if (dpts <= (int64_t) sync_ms * 90 && dpts >= (int64_t) sync_ms * -90) {
@@ -414,12 +462,13 @@ void SrsHlsAacJitter::on_buffer_continue()
 
 SrsTSMuxer::SrsTSMuxer()
 {
-    fd = -1;
+    writer = new SrsFileWriter();
 }
 
 SrsTSMuxer::~SrsTSMuxer()
 {
     close();
+    srs_freep(writer);
 }
 
 int SrsTSMuxer::open(string _path)
@@ -430,39 +479,34 @@ int SrsTSMuxer::open(string _path)
     
     close();
     
-    int flags = O_CREAT|O_WRONLY|O_TRUNC;
-    mode_t mode = S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH;
-    // TODO: FIXME: refine the file stream.
-    if ((fd = ::open(path.c_str(), flags, mode)) < 0) {
-        ret = ERROR_HLS_OPEN_FAILED;
-        srs_error("open ts file %s failed. ret=%d", path.c_str(), ret);
+    if ((ret = writer->open(path)) != ERROR_SUCCESS) {
         return ret;
     }
 
     // write mpegts header
-    if ((ret = SrsMpegtsWriter::write_header(fd)) != ERROR_SUCCESS) {
+    if ((ret = SrsMpegtsWriter::write_header(writer)) != ERROR_SUCCESS) {
         return ret;
     }
     
     return ret;
 }
 
-int SrsTSMuxer::write_audio(SrsMpegtsFrame* af, SrsCodecBuffer* ab)
+int SrsTSMuxer::write_audio(SrsMpegtsFrame* af, SrsBuffer* ab)
 {
     int ret = ERROR_SUCCESS;
     
-    if ((ret = SrsMpegtsWriter::write_frame(fd, af, ab)) != ERROR_SUCCESS) {
+    if ((ret = SrsMpegtsWriter::write_frame(writer, af, ab)) != ERROR_SUCCESS) {
         return ret;
     }
     
     return ret;
 }
 
-int SrsTSMuxer::write_video(SrsMpegtsFrame* vf, SrsCodecBuffer* vb)
+int SrsTSMuxer::write_video(SrsMpegtsFrame* vf, SrsBuffer* vb)
 {
     int ret = ERROR_SUCCESS;
     
-    if ((ret = SrsMpegtsWriter::write_frame(fd, vf, vb)) != ERROR_SUCCESS) {
+    if ((ret = SrsMpegtsWriter::write_frame(writer, vf, vb)) != ERROR_SUCCESS) {
         return ret;
     }
     
@@ -471,10 +515,7 @@ int SrsTSMuxer::write_video(SrsMpegtsFrame* vf, SrsCodecBuffer* vb)
 
 void SrsTSMuxer::close()
 {
-    if (fd > 0) {
-        ::close(fd);
-        fd = -1;
-    }
+    writer->close();
 }
 
 SrsHlsSegment::SrsHlsSegment()
@@ -619,11 +660,16 @@ int SrsHlsMuxer::on_sequence_header()
 bool SrsHlsMuxer::is_segment_overflow()
 {
     srs_assert(current);
-    
     return current->duration >= hls_fragment;
 }
 
-int SrsHlsMuxer::flush_audio(SrsMpegtsFrame* af, SrsCodecBuffer* ab)
+bool SrsHlsMuxer::is_segment_absolutely_overflow()
+{
+    srs_assert(current);
+    return current->duration >= 2 * hls_fragment;
+}
+
+int SrsHlsMuxer::flush_audio(SrsMpegtsFrame* af, SrsBuffer* ab)
 {
     int ret = ERROR_SUCCESS;
 
@@ -633,7 +679,7 @@ int SrsHlsMuxer::flush_audio(SrsMpegtsFrame* af, SrsCodecBuffer* ab)
         return ret;
     }
     
-    if (ab->size <= 0) {
+    if (ab->length() <= 0) {
         return ret;
     }
     
@@ -645,13 +691,12 @@ int SrsHlsMuxer::flush_audio(SrsMpegtsFrame* af, SrsCodecBuffer* ab)
     }
     
     // write success, clear and free the buffer
-    ab->free();
+    ab->erase(ab->length());
 
     return ret;
 }
 
-int SrsHlsMuxer::flush_video(
-    SrsMpegtsFrame* af, SrsCodecBuffer* ab, SrsMpegtsFrame* vf, SrsCodecBuffer* vb)
+int SrsHlsMuxer::flush_video(SrsMpegtsFrame* /*af*/, SrsBuffer* /*ab*/, SrsMpegtsFrame* vf, SrsBuffer* vb)
 {
     int ret = ERROR_SUCCESS;
 
@@ -671,7 +716,7 @@ int SrsHlsMuxer::flush_video(
     }
     
     // write success, clear and free the buffer
-    vb->free();
+    vb->erase(vb->length());
     
     return ret;
 }
@@ -825,7 +870,10 @@ int SrsHlsMuxer::_refresh_m3u8(int& fd, string m3u8_file)
         0x23, 0x45, 0x58, 0x54, 0x4d, 0x33, 0x55, 0xa, 
         // #EXT-X-VERSION:3\n
         0x23, 0x45, 0x58, 0x54, 0x2d, 0x58, 0x2d, 0x56, 0x45, 0x52, 
-        0x53, 0x49, 0x4f, 0x4e, 0x3a, 0x33, 0xa
+        0x53, 0x49, 0x4f, 0x4e, 0x3a, 0x33, 0xa,
+        // #EXT-X-ALLOW-CACHE:NO
+        0x23, 0x45, 0x58, 0x54, 0x2d, 0x58, 0x2d, 0x41, 0x4c, 0x4c, 
+        0x4f, 0x57, 0x2d, 0x43, 0x41, 0x43, 0x48, 0x45, 0x3a, 0x4e, 0x4f, 0x0a
     };
     if (::write(fd, header, sizeof(header)) != sizeof(header)) {
         ret = ERROR_HLS_WRITE_FAILED;
@@ -931,21 +979,19 @@ SrsHlsCache::SrsHlsCache()
 {
     aac_jitter = new SrsHlsAacJitter();
     
-    ab = new SrsCodecBuffer();
-    vb = new SrsCodecBuffer();
+    ab = new SrsBuffer();
+    vb = new SrsBuffer();
     
     af = new SrsMpegtsFrame();
     vf = new SrsMpegtsFrame();
-
-    video_count = 0;
 }
 
 SrsHlsCache::~SrsHlsCache()
 {
     srs_freep(aac_jitter);
     
-    ab->free();
-    vb->free();
+    ab->erase(ab->length());
+    vb->erase(vb->length());
     
     srs_freep(ab);
     srs_freep(vb);
@@ -962,14 +1008,11 @@ int SrsHlsCache::on_publish(SrsHlsMuxer* muxer, SrsRequest* req, int64_t segment
     std::string stream = req->stream;
     std::string app = req->app;
     
-    int hls_fragment = _srs_config->get_hls_fragment(vhost);
-    int hls_window = _srs_config->get_hls_window(vhost);
+    int hls_fragment = (int)_srs_config->get_hls_fragment(vhost);
+    int hls_window = (int)_srs_config->get_hls_window(vhost);
     
     // get the hls path config
     std::string hls_path = _srs_config->get_hls_path(vhost);
-    
-    // reset video count for new publish session.
-    video_count = 0;
     
     // TODO: FIXME: support load exists m3u8, to continue publish stream.
     // for the HLS donot requires the EXT-X-MEDIA-SEQUENCE be monotonically increase.
@@ -1020,8 +1063,8 @@ int SrsHlsCache::write_audio(SrsAvcAacCodec* codec, SrsHlsMuxer* muxer, int64_t 
     int ret = ERROR_SUCCESS;
     
     // start buffer, set the af
-    if (ab->size == 0) {
-        pts = aac_jitter->on_buffer_start(pts, sample->sound_rate);
+    if (ab->length() == 0) {
+        pts = aac_jitter->on_buffer_start(pts, sample->sound_rate, codec->aac_sample_rate);
         
         af->dts = af->pts = audio_buffer_start_pts = pts;
         af->pid = TS_AUDIO_PID;
@@ -1036,7 +1079,7 @@ int SrsHlsCache::write_audio(SrsAvcAacCodec* codec, SrsHlsMuxer* muxer, int64_t 
     }
     
     // flush if buffer exceed max size.
-    if (ab->size > SRS_AUTO_HLS_AUDIO_CACHE_SIZE) {
+    if (ab->length() > SRS_AUTO_HLS_AUDIO_CACHE_SIZE) {
         if ((ret = muxer->flush_audio(af, ab)) != ERROR_SUCCESS) {
             return ret;
         }
@@ -1051,9 +1094,15 @@ int SrsHlsCache::write_audio(SrsAvcAacCodec* codec, SrsHlsMuxer* muxer, int64_t 
         }
     }
     
-    // for pure audio
-    // start new segment when duration overflow.
-    if (video_count == 0 && muxer->is_segment_overflow()) {
+    // reap when current source is pure audio.
+    // it maybe changed when stream info changed,
+    // for example, pure audio when start, audio/video when publishing,
+    // pure audio again for audio disabled.
+    // so we reap event when the audio incoming when segment overflow.
+    // @see https://github.com/simple-rtmp-server/srs/issues/151
+    // we use absolutely overflow of segment to make jwplayer/ffplay happy
+    // @see https://github.com/simple-rtmp-server/srs/issues/151#issuecomment-71155184
+    if (muxer->is_segment_absolutely_overflow()) {
         if ((ret = reap_segment("audio", muxer, af->pts)) != ERROR_SUCCESS) {
             return ret;
         }
@@ -1066,8 +1115,6 @@ int SrsHlsCache::write_video(
     SrsAvcAacCodec* codec, SrsHlsMuxer* muxer, int64_t dts, SrsCodecSample* sample)
 {
     int ret = ERROR_SUCCESS;
-    
-    video_count++;
     
     // write video to cache.
     if ((ret = cache_video(codec, sample)) != ERROR_SUCCESS) {
@@ -1128,11 +1175,11 @@ int SrsHlsCache::cache_audio(SrsAvcAacCodec* codec, SrsCodecSample* sample)
 {
     int ret = ERROR_SUCCESS;
     
-    for (int i = 0; i < sample->nb_buffers; i++) {
-        SrsCodecBuffer* buf = &sample->buffers[i];
-        int32_t size = buf->size;
+    for (int i = 0; i < sample->nb_sample_units; i++) {
+        SrsCodecSampleUnit* sample_unit = &sample->sample_units[i];
+        int32_t size = sample_unit->size;
         
-        if (!buf->bytes || size <= 0 || size > 0x1fff) {
+        if (!sample_unit->bytes || size <= 0 || size > 0x1fff) {
             ret = ERROR_HLS_AAC_FRAME_LENGTH;
             srs_error("invalid aac frame length=%d, ret=%d", size, ret);
             return ret;
@@ -1145,7 +1192,7 @@ int SrsHlsCache::cache_audio(SrsAvcAacCodec* codec, SrsCodecSample* sample)
         // 6.2 Audio Data Transport Stream, ADTS
         // in aac-iso-13818-7.pdf, page 26.
         // fixed 7bytes header
-        static u_int8_t adts_header[7] = {0xff, 0xf1, 0x00, 0x00, 0x00, 0x0f, 0xfc};
+        static u_int8_t adts_header[7] = {0xff, 0xf9, 0x00, 0x00, 0x00, 0x0f, 0xfc};
         /*
         // adts_fixed_header
         // 2B, 16bits
@@ -1184,8 +1231,8 @@ int SrsHlsCache::cache_audio(SrsAvcAacCodec* codec, SrsCodecSample* sample)
         adts_header[5] |= 0x1f;
 
         // copy to audio buffer
-        ab->append(adts_header, sizeof(adts_header));
-        ab->append(buf->bytes, buf->size);
+        ab->append((const char*)adts_header, sizeof(adts_header));
+        ab->append(sample_unit->bytes, sample_unit->size);
     }
     
     return ret;
@@ -1195,64 +1242,109 @@ int SrsHlsCache::cache_video(SrsAvcAacCodec* codec, SrsCodecSample* sample)
 {
     int ret = ERROR_SUCCESS;
     
+    // for type1/5/6, insert aud packet.
     static u_int8_t aud_nal[] = { 0x00, 0x00, 0x00, 0x01, 0x09, 0xf0 };
-    vb->append(aud_nal, sizeof(aud_nal));
     
     bool sps_pps_sent = false;
-    for (int i = 0; i < sample->nb_buffers; i++) {
-        SrsCodecBuffer* buf = &sample->buffers[i];
-        int32_t size = buf->size;
+    bool aud_sent = false;
+    /**
+    * a ts sample is format as:
+    * 00 00 00 01 // header
+    *       xxxxxxx // data bytes
+    * 00 00 01 // continue header
+    *       xxxxxxx // data bytes.
+    * so, for each sample, we append header in aud_nal, then appends the bytes in sample.
+    */
+    for (int i = 0; i < sample->nb_sample_units; i++) {
+        SrsCodecSampleUnit* sample_unit = &sample->sample_units[i];
+        int32_t size = sample_unit->size;
         
-        if (!buf->bytes || size <= 0) {
+        if (!sample_unit->bytes || size <= 0) {
             ret = ERROR_HLS_AVC_SAMPLE_SIZE;
             srs_error("invalid avc sample length=%d, ret=%d", size, ret);
             return ret;
         }
         
+        /**
+        * step 1:
+        * first, before each "real" sample, 
+        * we add some packets according to the nal_unit_type,
+        * for example, when got nal_unit_type=5, insert SPS/PPS before sample.
+        */
+        
         // 5bits, 7.3.1 NAL unit syntax, 
         // H.264-AVC-ISO_IEC_14496-10.pdf, page 44.
         u_int8_t nal_unit_type;
-        nal_unit_type = *buf->bytes;
+        nal_unit_type = *sample_unit->bytes;
         nal_unit_type &= 0x1f;
         
+        // @see: ngx_rtmp_hls_video
         // Table 7-1 – NAL unit type codes, page 61
         // 1: Coded slice
         if (nal_unit_type == 1) {
             sps_pps_sent = false;
         }
+        
+        // 6: Supplemental enhancement information (SEI) sei_rbsp( ), page 61
+        // @see: ngx_rtmp_hls_append_aud
+        if (!aud_sent) {
+            // @remark, when got type 9, we donot send aud_nal, but it will make 
+            //      ios unhappy, so we remove it.
+            // @see https://github.com/simple-rtmp-server/srs/issues/281
+            /*if (nal_unit_type == 9) {
+                aud_sent = true;
+            }*/
+            
+            if (nal_unit_type == 1 || nal_unit_type == 5 || nal_unit_type == 6) {
+                // for type 6, append a aud with type 9.
+                vb->append((const char*)aud_nal, sizeof(aud_nal));
+                aud_sent = true;
+            }
+        }
+        
         // 5: Coded slice of an IDR picture.
         // insert sps/pps before IDR or key frame is ok.
         if (nal_unit_type == 5 && !sps_pps_sent) {
-        //if (vf->key && !sps_pps_sent) {
             sps_pps_sent = true;
             
-            // ngx_rtmp_hls_append_sps_pps
+            // @see: ngx_rtmp_hls_append_sps_pps
             if (codec->sequenceParameterSetLength > 0) {
-                // AnnexB prefix
-                vb->append(aud_nal, 4);
+                // AnnexB prefix, for sps always 4 bytes header
+                vb->append((const char*)aud_nal, 4);
                 // sps
                 vb->append(codec->sequenceParameterSetNALUnit, codec->sequenceParameterSetLength);
             }
             if (codec->pictureParameterSetLength > 0) {
-                // AnnexB prefix
-                vb->append(aud_nal, 4);
+                // AnnexB prefix, for pps always 4 bytes header
+                vb->append((const char*)aud_nal, 4);
                 // pps
                 vb->append(codec->pictureParameterSetNALUnit, codec->pictureParameterSetLength);
             }
         }
+        
+        // 7-9, ignore, @see: ngx_rtmp_hls_video
+        if (nal_unit_type >= 7 && nal_unit_type <= 9) {
+            continue;
+        }
+        
+        /**
+        * step 2:
+        * output the "real" sample, in buf.
+        * when we output some special assist packets according to nal_unit_type
+        */
         
         // sample start prefix, '00 00 00 01' or '00 00 01'
         u_int8_t* p = aud_nal + 1;
         u_int8_t* end = p + 3;
         
         // first AnnexB prefix is long (4 bytes)
-        if (i == 0) {
+        if (vb->length() == 0) {
             p = aud_nal;
         }
-        vb->append(p, end - p);
+        vb->append((const char*)p, end - p);
         
         // sample data
-        vb->append(buf->bytes, buf->size);
+        vb->append(sample_unit->bytes, sample_unit->size);
     }
     
     return ret;
@@ -1270,7 +1362,7 @@ SrsHls::SrsHls(SrsSource* _source)
     muxer = new SrsHlsMuxer();
     hls_cache = new SrsHlsCache();
 
-    pithy_print = new SrsPithyPrint(SRS_STAGE_HLS);
+    pithy_print = new SrsPithyPrint(SRS_CONSTS_STAGE_HLS);
     stream_dts = 0;
 }
 
@@ -1343,45 +1435,14 @@ int SrsHls::on_meta_data(SrsAmf0Object* metadata)
         return ret;
     }
     
-    SrsAmf0Object* obj = metadata;
-    if (obj->count() <= 0) {
+    if (metadata->count() <= 0) {
         srs_trace("no metadata persent, hls ignored it.");
         return ret;
     }
     
-    //    finger out the codec info from metadata if possible.
-    SrsAmf0Any* prop = NULL;
-
-    if ((prop = obj->get_property("duration")) != NULL && prop->is_number()) {
-        codec->duration = (int)prop->to_number();
+    if ((ret = codec->metadata_demux(metadata)) != ERROR_SUCCESS) {
+        return ret;
     }
-    if ((prop = obj->get_property("width")) != NULL && prop->is_number()) {
-        codec->width = (int)prop->to_number();
-    }
-    if ((prop = obj->get_property("height")) != NULL && prop->is_number()) {
-        codec->height = (int)prop->to_number();
-    }
-    if ((prop = obj->get_property("framerate")) != NULL && prop->is_number()) {
-        codec->frame_rate = (int)prop->to_number();
-    }
-    if ((prop = obj->get_property("videocodecid")) != NULL && prop->is_number()) {
-        codec->video_codec_id = (int)prop->to_number();
-    }
-    if ((prop = obj->get_property("videodatarate")) != NULL && prop->is_number()) {
-        codec->video_data_rate = (int)(1000 * prop->to_number());
-    }
-    
-    if ((prop = obj->get_property("audiocodecid")) != NULL && prop->is_number()) {
-        codec->audio_codec_id = (int)prop->to_number();
-    }
-    if ((prop = obj->get_property("audiodatarate")) != NULL && prop->is_number()) {
-        codec->audio_data_rate = (int)(1000 * prop->to_number());
-    }
-    
-    // ignore the following, for each flv/rtmp packet contains them:
-    // audiosamplerate, sample->sound_rate
-    // audiosamplesize, sample->sound_size
-    // stereo,             sample->sound_type
     
     return ret;
 }
@@ -1398,7 +1459,7 @@ int SrsHls::on_audio(SrsSharedPtrMessage* audio)
     
     sample->clear();
     if ((ret = codec->audio_aac_demux(audio->payload, audio->size, sample)) != ERROR_SUCCESS) {
-        srs_error("codec demux audio failed. ret=%d", ret);
+        srs_error("hls codec demux audio failed. ret=%d", ret);
         return ret;
     }
     
@@ -1411,7 +1472,7 @@ int SrsHls::on_audio(SrsSharedPtrMessage* audio)
         return hls_cache->on_sequence_header(muxer);
     }
     
-    if ((ret = jitter->correct(audio, 0, 0)) != ERROR_SUCCESS) {
+    if ((ret = jitter->correct(audio, 0, 0, SrsRtmpJitterAlgorithmFULL)) != ERROR_SUCCESS) {
         srs_error("rtmp jitter correct audio failed. ret=%d", ret);
         return ret;
     }
@@ -1442,7 +1503,13 @@ int SrsHls::on_video(SrsSharedPtrMessage* video)
     
     sample->clear();
     if ((ret = codec->video_avc_demux(video->payload, video->size, sample)) != ERROR_SUCCESS) {
-        srs_error("codec demux video failed. ret=%d", ret);
+        srs_error("hls codec demux video failed. ret=%d", ret);
+        return ret;
+    }
+    
+    // ignore info frame,
+    // @see https://github.com/simple-rtmp-server/srs/issues/288#issuecomment-69863909
+    if (sample->frame_type == SrsCodecVideoAVCFrameVideoInfoFrame) {
         return ret;
     }
     
@@ -1456,7 +1523,7 @@ int SrsHls::on_video(SrsSharedPtrMessage* video)
         return hls_cache->on_sequence_header(muxer);
     }
     
-    if ((ret = jitter->correct(video, 0, 0)) != ERROR_SUCCESS) {
+    if ((ret = jitter->correct(video, 0, 0, SrsRtmpJitterAlgorithmFULL)) != ERROR_SUCCESS) {
         srs_error("rtmp jitter correct video failed. ret=%d", ret);
         return ret;
     }
@@ -1477,13 +1544,17 @@ void SrsHls::hls_mux()
 {
     // reportable
     if (pithy_print->can_print()) {
-        srs_trace("-> "SRS_LOG_ID_HLS
-            " time=%"PRId64", dts=%"PRId64", sequence_no=%d", 
-            pithy_print->age(), stream_dts, muxer->sequence_no());
+        // the run time is not equals to stream time,
+        // @see: https://github.com/simple-rtmp-server/srs/issues/81#issuecomment-48100994
+        // it's ok.
+        srs_trace("-> "SRS_CONSTS_LOG_HLS
+            " time=%"PRId64", stream dts=%"PRId64"(%"PRId64"ms), sequence_no=%d", 
+            pithy_print->age(), stream_dts, stream_dts / 90, muxer->sequence_no());
     }
     
     pithy_print->elapse();
 }
 
 #endif
+
 

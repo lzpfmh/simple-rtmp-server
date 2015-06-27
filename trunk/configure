@@ -115,7 +115,6 @@ SrsHttpServerSummaryColor="\${YELLOW}{disabled} "; if [ $SRS_HTTP_SERVER = YES ]
 SrsHttpApiSummaryColor="\${YELLOW}{disabled} "; if [ $SRS_HTTP_API = YES ]; then SrsHttpApiSummaryColor="\${GREEN}"; fi
 SrsLibrtmpSummaryColor="\${YELLOW}{disabled} "; if [ $SRS_LIBRTMP = YES ]; then SrsLibrtmpSummaryColor="\${GREEN}"; fi
 SrsLibrtmpSSLSummaryColor="\${YELLOW}{disabled} "; if [ $SRS_LIBRTMP = YES ]; then if [ $SRS_SSL = YES ]; then SrsLibrtmpSSLSummaryColor="\${GREEN}"; fi fi
-SrsBWTCSummaryColor="\${GREEN}{disabled} "; if [ $SRS_BWTC = YES ]; then SrsBWTCSummaryColor="\${GREEN}"; fi
 SrsResearchSummaryColor="\${GREEN}{disabled} "; if [ $SRS_RESEARCH = YES ]; then SrsResearchSummaryColor="\${GREEN}"; fi
 SrsUtestSummaryColor="\${YELLOW}{disabled} "; if [ $SRS_UTEST = YES ]; then SrsUtestSummaryColor="\${GREEN}"; fi
 SrsGperfSummaryColor="\${GREEN}{disabled} "; if [ $SRS_GPERF = YES ]; then SrsGperfSummaryColor="\${GREEN}"; fi
@@ -135,70 +134,78 @@ BLACK="\\${BLACK}"
 
 echo -e "\${GREEN}build summary:\${BLACK}"
 echo -e "     \${BLACK}+------------------------------------------------------------------------------------\${BLACK}"
-echo -e "     |${SrsGperfSummaryColor}gperf @see: https://github.com/winlinvip/simple-rtmp-server/wiki/GPERF\${BLACK}"
+echo -e "     |${SrsGperfSummaryColor}gperf @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_GPERF\${BLACK}"
 echo -e "     |     ${SrsGperfMCSummaryColor}gmc @see: http://google-perftools.googlecode.com/svn/trunk/doc/heap_checker.html\${BLACK}"
 echo -e "     |     ${SrsGperfMCSummaryColor}gmc: gperf memory check\${BLACK}"
-echo -e "     |             ${SrsGperfMCSummaryColor}env PPROF_PATH=./objs/pprof HEAPCHECK=normal ./objs/srs -c conf/srs.conf # start gmc\${BLACK}"
+echo -e "     |             ${SrsGperfMCSummaryColor}env PPROF_PATH=./objs/pprof HEAPCHECK=normal ./objs/srs -c conf/console.conf # start gmc\${BLACK}"
 echo -e "     |             ${SrsGperfMCSummaryColor}killall -2 srs # or CTRL+C to stop gmc\${BLACK}"
 echo -e "     |     ${SrsGperfMPSummaryColor}gmp @see: http://google-perftools.googlecode.com/svn/trunk/doc/heapprofile.html\${BLACK}"
 echo -e "     |     ${SrsGperfMPSummaryColor}gmp: gperf memory profile\${BLACK}"
-echo -e "     |             ${SrsGperfMPSummaryColor}rm -f gperf.srs.gmp*; ./objs/srs -c conf/srs.conf # start gmp\${BLACK}"
+echo -e "     |             ${SrsGperfMPSummaryColor}rm -f gperf.srs.gmp*; ./objs/srs -c conf/console.conf # start gmp\${BLACK}"
 echo -e "     |             ${SrsGperfMPSummaryColor}killall -2 srs # or CTRL+C to stop gmp\${BLACK}"
 echo -e "     |             ${SrsGperfMPSummaryColor}./objs/pprof --text objs/srs gperf.srs.gmp* # to analysis memory profile\${BLACK}"
 echo -e "     |     ${SrsGperfCPSummaryColor}gcp @see: http://google-perftools.googlecode.com/svn/trunk/doc/cpuprofile.html\${BLACK}"
 echo -e "     |     ${SrsGperfCPSummaryColor}gcp: gperf cpu profile\${BLACK}"
-echo -e "     |             ${SrsGperfCPSummaryColor}rm -f gperf.srs.gcp*; ./objs/srs -c conf/srs.conf # start gcp\${BLACK}"
+echo -e "     |             ${SrsGperfCPSummaryColor}rm -f gperf.srs.gcp*; ./objs/srs -c conf/console.conf # start gcp\${BLACK}"
 echo -e "     |             ${SrsGperfCPSummaryColor}killall -2 srs # or CTRL+C to stop gcp\${BLACK}"
 echo -e "     |             ${SrsGperfCPSummaryColor}./objs/pprof --text objs/srs gperf.srs.gcp* # to analysis cpu profile\${BLACK}"
 echo -e "     \${BLACK}+------------------------------------------------------------------------------------\${BLACK}"
-echo -e "     |${SrsGprofSummaryColor}gprof @see: https://github.com/winlinvip/simple-rtmp-server/wiki/GPROF\${BLACK}"
+echo -e "     |${SrsGprofSummaryColor}gprof @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_GPROF\${BLACK}"
 echo -e "     |${SrsGprofSummaryColor}gprof: GNU profile tool, @see: http://www.cs.utah.edu/dept/old/texinfo/as/gprof.html\${BLACK}"
-echo -e "     |     ${SrsGprofSummaryColor}rm -f gmon.out; ./objs/srs -c conf/srs.conf # start gprof\${BLACK}"
+echo -e "     |     ${SrsGprofSummaryColor}rm -f gmon.out; ./objs/srs -c conf/console.conf # start gprof\${BLACK}"
 echo -e "     |     ${SrsGprofSummaryColor}killall -2 srs # or CTRL+C to stop gprof\${BLACK}"
 echo -e "     |     ${SrsGprofSummaryColor}gprof -b ./objs/srs gmon.out > gprof.srs.log && rm -f gmon.out # gprof report to gprof.srs.log\${BLACK}"
 echo -e "     \${BLACK}+------------------------------------------------------------------------------------\${BLACK}"
-echo -e "     |${SrsResearchSummaryColor}research: ./objs/research, api server, players, ts info.\${BLACK}"
-echo -e "     \${BLACK}+------------------------------------------------------------------------------------\${BLACK}"
-echo -e "     |${SrsBWTCSummaryColor}bandwidth: ./objs/bandwidth, the bandwidth test client\${BLACK}"
+echo -e "     |${SrsResearchSummaryColor}research: ./objs/research, api server, players, ts info, librtmp.\${BLACK}"
 echo -e "     \${BLACK}+------------------------------------------------------------------------------------\${BLACK}"
 echo -e "     |${SrsUtestSummaryColor}utest: ./objs/srs_utest, the utest for srs\${BLACK}"
 echo -e "     \${BLACK}+------------------------------------------------------------------------------------\${BLACK}"
-echo -e "     |${SrsLibrtmpSummaryColor}librtmp @see: https://github.com/winlinvip/simple-rtmp-server/wiki/SrsLibrtmp\${BLACK}"
+echo -e "     |${SrsLibrtmpSummaryColor}librtmp @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_SrsLibrtmp\${BLACK}"
 echo -e "     |${SrsLibrtmpSummaryColor}librtmp: ./objs/include, ./objs/lib, the srs-librtmp library\${BLACK}"
 echo -e "     |     ${SrsLibrtmpSummaryColor}simple handshake: publish/play stream with simple handshake to server\${BLACK}"
 echo -e "     |     ${SrsLibrtmpSSLSummaryColor}complex handshake: it's not required for client, recommend disable it\${BLACK}"
 echo -e "     |     ${SrsLibrtmpSummaryColor}librtmp-sample: ./research/librtmp, the srs-librtmp client sample\${BLACK}"
+echo -e "     |     ${SrsLibrtmpSummaryColor}librtmp-sample: ./research/librtmp/objs/srs_ingest_flv\${BLACK}"
+echo -e "     |     ${SrsLibrtmpSummaryColor}librtmp-sample: ./research/librtmp/objs/srs_ingest_rtmp\${BLACK}"
+echo -e "     |     ${SrsLibrtmpSummaryColor}librtmp-sample: ./research/librtmp/objs/srs_detect_rtmp\${BLACK}"
+echo -e "     |     ${SrsLibrtmpSummaryColor}librtmp-sample: ./research/librtmp/objs/srs_bandwidth_check\${BLACK}"
 echo -e "     \${BLACK}+------------------------------------------------------------------------------------\${BLACK}"
 echo -e "     |\${GREEN}server: ./objs/srs -c conf/srs.conf, start the srs server\${BLACK}"
-echo -e "     |     ${SrsHlsSummaryColor}hls @see: https://github.com/winlinvip/simple-rtmp-server/wiki/DeliveryHLS\${BLACK}"
+echo -e "     |     ${SrsHlsSummaryColor}hls @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_DeliveryHLS\${BLACK}"
 echo -e "     |     ${SrsHlsSummaryColor}hls: generate m3u8 and ts from rtmp stream\${BLACK}"
-echo -e "     |     ${SrsDvrSummaryColor}dvr @see: https://github.com/winlinvip/simple-rtmp-server/wiki/DVR\${BLACK}"
+echo -e "     |     ${SrsDvrSummaryColor}dvr @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_DVR\${BLACK}"
 echo -e "     |     ${SrsDvrSummaryColor}dvr: record RTMP stream to flv files.\${BLACK}"
-echo -e "     |     ${SrsNginxSummaryColor}nginx @see: https://github.com/winlinvip/simple-rtmp-server/wiki/DeliveryHLS\${BLACK}"
+echo -e "     |     ${SrsNginxSummaryColor}nginx @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_DeliveryHLS\${BLACK}"
 echo -e "     |     ${SrsNginxSummaryColor}nginx: delivery HLS stream by nginx\${BLACK}"
-echo -e "     |     ${SrsSslSummaryColor}ssl @see: https://github.com/winlinvip/simple-rtmp-server/wiki/RTMPHandshake\${BLACK}"
+echo -e "     |     ${SrsNginxSummaryColor}nginx: sudo ./objs/nginx/sbin/nginx\${BLACK}"
+echo -e "     |     ${SrsSslSummaryColor}ssl @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_RTMPHandshake\${BLACK}"
 echo -e "     |     ${SrsSslSummaryColor}ssl: support RTMP complex handshake for client required, for instance, flash\${BLACK}"
-echo -e "     |     ${SrsFfmpegSummaryColor}ffmpeg @see: https://github.com/winlinvip/simple-rtmp-server/wiki/FFMPEG\${BLACK}"
+echo -e "     |     ${SrsFfmpegSummaryColor}ffmpeg @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_FFMPEG\${BLACK}"
 echo -e "     |     ${SrsFfmpegSummaryColor}ffmpeg: transcode, mux, ingest tool\${BLACK}"
-echo -e "     |     ${SrsTranscodeSummaryColor}transcode @see: https://github.com/winlinvip/simple-rtmp-server/wiki/FFMPEG\${BLACK}"
+echo -e "     |     ${SrsFfmpegSummaryColor}ffmpeg: ./objs/ffmpeg/bin/ffmpeg\${BLACK}"
+echo -e "     |     ${SrsTranscodeSummaryColor}transcode @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_FFMPEG\${BLACK}"
 echo -e "     |     ${SrsTranscodeSummaryColor}transcode: support transcoding RTMP stream\${BLACK}"
-echo -e "     |     ${SrsIngestSummaryColor}ingest @see: https://github.com/winlinvip/simple-rtmp-server/wiki/Ingest\${BLACK}"
+echo -e "     |     ${SrsIngestSummaryColor}ingest @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_Ingest\${BLACK}"
 echo -e "     |     ${SrsIngestSummaryColor}ingest: support ingest file/stream/device then push to SRS by RTMP stream\${BLACK}"
-echo -e "     |     ${SrsHttpCallbackSummaryColor}http-callback @see: https://github.com/winlinvip/simple-rtmp-server/wiki/HTTPCallback\${BLACK}"
+echo -e "     |     ${SrsHttpCallbackSummaryColor}http-callback @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_HTTPCallback\${BLACK}"
 echo -e "     |     ${SrsHttpCallbackSummaryColor}http-callback: support http callback for authentication and event injection\${BLACK}"
-echo -e "     |     ${SrsHttpServerSummaryColor}http-server @see: https://github.com/winlinvip/simple-rtmp-server/wiki/HTTPServer\${BLACK}"
+echo -e "     |     ${SrsHttpServerSummaryColor}http-server @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_HTTPServer\${BLACK}"
 echo -e "     |     ${SrsHttpServerSummaryColor}http-server: support http server to delivery http stream\${BLACK}"
-echo -e "     |     ${SrsHttpApiSummaryColor}http-api @see: https://github.com/winlinvip/simple-rtmp-server/wiki/HTTPApi\${BLACK}"
+echo -e "     |     ${SrsHttpApiSummaryColor}http-api @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_HTTPApi\${BLACK}"
 echo -e "     |     ${SrsHttpApiSummaryColor}http-api: support http api to manage server\${BLACK}"
 echo -e "     \${BLACK}+------------------------------------------------------------------------------------\${BLACK}"
-echo -e "\${GREEN}binaries @see: https://github.com/winlinvip/simple-rtmp-server/wiki/Build\${BLACK}"
+echo -e "\${GREEN}binaries @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_Build\${BLACK}"
+
+echo "you can:"
+echo "      ./objs/srs -c conf/srs.conf"
+echo "                  to start the srs server, with config conf/srs.conf."
 END
 
 #####################################################################################
 # makefile
 echo "generate Makefile"
 cat << END > ${SRS_MAKEFILE}
-.PHONY: default _default install install-api help clean server bandwidth librtmp librtmp-sample utest _prepare_dir
+.PHONY: default _default install install-api help clean server librtmp utest _prepare_dir
 
 # install prefix.
 SRS_PREFIX=${SRS_PREFIX}
@@ -224,24 +231,22 @@ fi
 
 # the real entry for all platform.
 cat << END >> ${SRS_MAKEFILE}
-_default: bandwidth librtmp-sample utest
+_default: server librtmp utest
 	@bash objs/_srs_build_summary.sh
 
 help:
-	@echo "Usage: make <help>|<clean>|<server>|<bandwidth>|<librtmp>|<librtmp-sample>|<utest>|<install>|<install-api>|<uninstall>"
+	@echo "Usage: make <help>|<clean>|<server>|<librtmp>|<utest>|<install>|<install-api>|<uninstall>"
 	@echo "  help               display this help menu"
 	@echo "  clean              cleanup project"
 	@echo "  server             build the srs(simple rtmp server) over st(state-threads)"
-	@echo "  bandwidth          build the bandwidth test client tool."
-	@echo "  librtmp            build the client publish/play library."
-	@echo "  librtmp-sample     build the srs-librtmp sample"
+	@echo "  librtmp            build the client publish/play library, and samples"
 	@echo "  utest              build the utest for srs"
 	@echo "  install            install srs to the prefix path"
-	@echo "  install-api        install srs api to the prefix path"
+	@echo "  install-api        install srs and api-server to the prefix path"
 	@echo "  uninstall          uninstall srs from prefix path"
 
 clean: 
-	(cd ${SRS_OBJS}; rm -rf srs bandwidth srs_utest)
+	(cd ${SRS_OBJS}; rm -rf srs srs_utest)
 	(cd ${SRS_OBJS}; rm -rf src research include lib)
 	(cd ${SRS_OBJS}/utest; rm -rf *.o *.a)
 	(cd research/librtmp; make clean)
@@ -278,10 +283,10 @@ install-api: install
 	@sed -i "s|^ROOT=.*|ROOT=\"\$(SRS_PREFIX)\"|g" \$(__REAL_INSTALL)/etc/init.d/srs-api
 	@echo ""
 	@echo "api installed, to link and start api:"
-	@echo "     sudo ln -sf /usr/local/srs/etc/init.d/srs-api /etc/init.d/srs-api"
+	@echo "     sudo ln -sf \$(SRS_PREFIX)/etc/init.d/srs-api /etc/init.d/srs-api"
 	@echo "     /etc/init.d/srs-api start"
 	@echo "     http://\$(shell bash auto/local_ip.sh):8085"
-	@echo "@see: https://github.com/winlinvip/simple-rtmp-server/wiki/LinuxService"
+	@echo "@see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_LinuxService"
 
 install:
 	@echo "mkdir \$(__REAL_INSTALL)"
@@ -301,55 +306,25 @@ install:
 	@sed -i "s|^ROOT=.*|ROOT=\"\$(SRS_PREFIX)\"|g" \$(__REAL_INSTALL)/etc/init.d/srs
 	@echo ""
 	@echo "srs installed, to link and start srs:"
-	@echo "     sudo ln -sf /usr/local/srs/etc/init.d/srs /etc/init.d/srs"
+	@echo "     sudo ln -sf \$(SRS_PREFIX)/etc/init.d/srs /etc/init.d/srs"
 	@echo "     /etc/init.d/srs start"
-	@echo "@see: https://github.com/winlinvip/simple-rtmp-server/wiki/LinuxService"
+	@echo "@see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_LinuxService"
 
 END
-
-if [ $SRS_BWTC = YES ]; then
-    cat << END >> ${SRS_MAKEFILE}
-bandwidth: server
-	@echo "build the bandwidth test client tool"
-	\$(MAKE) -f ${SRS_OBJS}/${SRS_MAKEFILE} bandwidth
-
-END
-else
-    cat << END >> ${SRS_MAKEFILE}
-bandwidth: server
-	@echo "bandwidth test client tool is disabled, ignore."
-
-END
-fi
 
 if [ $SRS_LIBRTMP = YES ]; then
     cat << END >> ${SRS_MAKEFILE}
 librtmp: server
 	@echo "build the client publish/play library."
 	\$(MAKE) -f ${SRS_OBJS}/${SRS_MAKEFILE} librtmp
+	@echo "build the srs-librtmp sample"
+	(cd research/librtmp; \$(MAKE) ${SrsLibrtmpSampleEntry})
 
 END
 else
     cat << END >> ${SRS_MAKEFILE}
 librtmp: server
 	@echo "srs-librtmp is disabled, ignore."
-
-END
-fi
-if [ $SRS_LIBRTMP = YES ]; then
-    cat << END >> ${SRS_MAKEFILE}
-
-librtmp-sample: librtmp
-	@echo "build the srs-librtmp sample"
-	(cd research/librtmp; \$(MAKE) ${SrsLibrtmpSampleEntry})
-	@echo "srs-librtmp sample build success"
-
-END
-else
-    cat << END >> ${SRS_MAKEFILE}
-
-librtmp-sample: librtmp
-	@echo "srs-librtmp sample is disabled, ignore."
 
 END
 fi
@@ -400,7 +375,7 @@ AR = ar
 LINK = g++
 CXXFLAGS = ${CXXFLAGS}
 
-.PHONY: default srs bandwidth librtmp
+.PHONY: default srs librtmp
 
 default:
 
@@ -447,7 +422,8 @@ MODULE_ID="KERNEL"
 MODULE_DEPENDS=("CORE") 
 ModuleLibIncs=(${SRS_OBJS})
 MODULE_FILES=("srs_kernel_error" "srs_kernel_log" "srs_kernel_stream" "srs_kernel_buffer" 
-        "srs_kernel_utility" "srs_kernel_flv" "srs_kernel_codec")
+        "srs_kernel_utility" "srs_kernel_flv" "srs_kernel_codec" "srs_kernel_file" 
+        "srs_kernel_consts")
 KERNEL_INCS="src/kernel"; MODULE_DIR=${KERNEL_INCS} . auto/modules.sh
 KERNEL_OBJS="${MODULE_OBJS[@]}"
 #
@@ -455,8 +431,8 @@ KERNEL_OBJS="${MODULE_OBJS[@]}"
 MODULE_ID="RTMP" 
 MODULE_DEPENDS=("CORE" "KERNEL") 
 ModuleLibIncs=(${SRS_OBJS} ${LibSSLRoot})
-MODULE_FILES=("srs_protocol_amf0" "srs_protocol_io" "srs_protocol_rtmp_stack" "srs_protocol_rtmp"
-        "srs_protocol_handshake" "srs_protocol_utility")
+MODULE_FILES=("srs_protocol_amf0" "srs_protocol_io" "srs_protocol_stack" "srs_protocol_rtmp"
+        "srs_protocol_handshake" "srs_protocol_utility" "srs_protocol_msg_array")
 RTMP_INCS="src/rtmp"; MODULE_DIR=${RTMP_INCS} . auto/modules.sh
 RTMP_OBJS="${MODULE_OBJS[@]}"
 #
@@ -464,7 +440,7 @@ RTMP_OBJS="${MODULE_OBJS[@]}"
 MODULE_ID="APP" 
 MODULE_DEPENDS=("CORE" "KERNEL" "RTMP") 
 ModuleLibIncs=(${LibSTRoot} ${LibHttpParserRoot} ${SRS_OBJS})
-MODULE_FILES=("srs_app_server" "srs_app_conn" "srs_app_rtmp_conn" "srs_app_socket" "srs_app_source" 
+MODULE_FILES=("srs_app_server" "srs_app_conn" "srs_app_rtmp_conn" "srs_app_st_socket" "srs_app_source" 
         "srs_app_refer" "srs_app_hls" "srs_app_forward" "srs_app_encoder" "srs_app_http" 
         "srs_app_thread" "srs_app_bandwidth" "srs_app_st" "srs_app_log" "srs_app_config" 
         "srs_app_pithy_print" "srs_app_reload" "srs_app_http_api" "srs_app_http_conn" "srs_app_http_hooks" 
@@ -477,7 +453,7 @@ APP_OBJS="${MODULE_OBJS[@]}"
 MODULE_ID="LIBS" 
 MODULE_DEPENDS=("CORE" "KERNEL" "RTMP") 
 ModuleLibIncs=(${SRS_OBJS})
-MODULE_FILES=("srs_librtmp" "srs_lib_simple_socket")
+MODULE_FILES=("srs_librtmp" "srs_lib_simple_socket" "srs_lib_bandwidth")
 LIBS_INCS="src/libs"; MODULE_DIR=${LIBS_INCS} . auto/modules.sh
 LIBS_OBJS="${MODULE_OBJS[@]}"
 #
@@ -485,7 +461,7 @@ LIBS_OBJS="${MODULE_OBJS[@]}"
 MODULE_ID="MAIN" 
 MODULE_DEPENDS=("CORE" "KERNEL" "RTMP" "APP")
 ModuleLibIncs=(${LibSTRoot} ${SRS_OBJS} ${LibGperfRoot})
-MODULE_FILES=("srs_main_server" "srs_main_bandcheck")
+MODULE_FILES=("srs_main_server")
 MAIN_INCS="src/main"; MODULE_DIR=${MAIN_INCS} . auto/modules.sh
 MAIN_OBJS="${MODULE_OBJS[@]}"
 
@@ -494,7 +470,7 @@ MAIN_OBJS="${MODULE_OBJS[@]}"
 # then link to a binary, for example, objs/srs
 #
 # all main entrances
-MAIN_ENTRANCES=("srs_main_server" "srs_main_bandcheck")
+MAIN_ENTRANCES=("srs_main_server")
 # 
 # all depends libraries
 ModuleLibFiles=(${LibSTfile} ${LibHttpParserfile} ${LibSSLfile} ${LibGperfFile})
@@ -505,10 +481,6 @@ LINK_OPTIONS="${SrsLinkOptions}${SrsGprofLink}${SrsGperfLink}"
 # srs:
 # srs(simple rtmp server) over st(state-threads)
 BUILD_KEY="srs" APP_MAIN="srs_main_server" APP_NAME="srs" . auto/apps.sh
-# bandwidth test tool, to test the bandwidth to server
-if [ $SRS_BWTC = YES ]; then
-    BUILD_KEY="bandwidth" APP_MAIN="srs_main_bandcheck" APP_NAME="bandwidth" . auto/apps.sh
-fi
 # srs librtmp
 if [ $SRS_LIBRTMP = YES ]; then
     MODULE_OBJS="${CORE_OBJS[@]} ${KERNEL_OBJS[@]} ${RTMP_OBJS[@]} ${LIBS_OBJS[@]}"
@@ -516,8 +488,10 @@ if [ $SRS_LIBRTMP = YES ]; then
 fi
 #
 # utest, the unit-test cases of srs, base on gtest1.6
-MODULE_FILES=("srs_utest" "srs_utest_amf0" "srs_utest_handshake" "srs_utest_buffer")
-ModuleLibIncs=(${SRS_OBJS} ${LibSTRoot})
+MODULE_FILES=("srs_utest" "srs_utest_amf0" "srs_utest_protocol" 
+        "srs_utest_kernel" "srs_utest_core" "srs_utest_config" 
+        "srs_utest_reload")
+ModuleLibIncs=(${SRS_OBJS} ${LibSTRoot} ${LibSSLRoot})
 ModuleLibFiles=(${LibSTfile} ${LibHttpParserfile} ${LibSSLfile})
 MODULE_DEPENDS=("CORE" "KERNEL" "RTMP" "APP")
 MODULE_OBJS="${CORE_OBJS[@]} ${KERNEL_OBJS[@]} ${RTMP_OBJS[@]} ${APP_OBJS[@]}"
@@ -594,11 +568,6 @@ if [ $SRS_LIBRTMP = YES ]; then
 else
     echo -e "${YELLOW}note: srs-librtmp for client is disabled${BLACK}"
 fi
-if [ $SRS_BWTC = YES ]; then
-    echo -e "${GREEN}srs bandwidth test client is enabled${BLACK}"
-else
-    echo -e "${GREEN}note: srs bandwidth test client is disabled${BLACK}"
-fi
 if [ $SRS_RESEARCH = YES ]; then
     echo -e "${GREEN}research tools are builded${BLACK}"
 else
@@ -650,12 +619,9 @@ fi
 #####################################################################################
 ip=`ifconfig|grep "inet addr"| grep -v "127.0.0.1"|awk '{print $2}'|awk -F ':' 'NR==1 {print $2}'`
 echo ""
-echo "you can:"
-echo "\" make \" to build the srs(simple rtmp server)."
-echo "\" make help \" to get the usage of make"
+echo "to run 3rdparty application:"
 if [ $SRS_NGINX = YES ]; then
     echo "\" sudo ./objs/nginx/sbin/nginx  \" to start the nginx http server for hls"
-    echo "\" http://$ip \" rtmp players(OSMF/JWPlayer)"
 fi
 if [ $SRS_FFMPEG_TOOL = YES ]; then
     echo -e "\" ./objs/ffmpeg/bin/ffmpeg  \" is used for live stream transcoding"
@@ -663,5 +629,7 @@ fi
 if [ $SRS_HTTP_CALLBACK = YES ]; then
     echo -e "\" python ./research/api-server/server.py 8085  \" to start the api-server"
 fi
-echo "\" ./objs/srs -c conf/srs.conf \" to start the srs live server"
-echo "\" ./objs/srs.test \" to test srs"
+echo ""
+echo "to build:"
+echo "\" make \" to build the srs(simple rtmp server)."
+echo "\" make help \" to get the usage of make"

@@ -26,9 +26,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 using namespace std;
 
 #include <srs_kernel_log.hpp>
-#include <srs_kernel_error.hpp>
 
-#ifdef SRS_JSON_USE_NXJSON
+#ifdef __SRS_JSON_USE_NXJSON
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -303,7 +302,7 @@ SrsJsonArray* SrsJsonAny::array()
     return new SrsJsonArray();
 }
 
-#ifdef SRS_JSON_USE_NXJSON
+#ifdef __SRS_JSON_USE_NXJSON
 SrsJsonAny* srs_json_parse_tree_nx_json(const nx_json* node)
 {
     if (!node) {
@@ -490,7 +489,7 @@ void SrsJsonArray::add(SrsJsonAny* value)
     properties.push_back(value);
 }
 
-#ifdef SRS_JSON_USE_NXJSON
+#ifdef __SRS_JSON_USE_NXJSON
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -526,7 +525,6 @@ extern "C" {
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <malloc.h>
 #include <assert.h>
 
 //#include "nxjson.h"
@@ -892,4 +890,5 @@ const nx_json* nx_json_item(const nx_json* json, int idx) {
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 #endif
+
 

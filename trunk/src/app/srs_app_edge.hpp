@@ -33,7 +33,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <srs_app_st.hpp>
 #include <srs_app_thread.hpp>
 
-class SrsSocket;
+#include <string>
+
+class SrsStSocket;
 class SrsRtmpServer;
 class SrsSource;
 class SrsRequest;
@@ -55,7 +57,7 @@ enum SrsEdgeState
     // for play edge
     SrsEdgeStatePlay = 100,
     // play stream from origin, ingest stream
-    SrsEdgeStateIngestConnected,
+    SrsEdgeStateIngestConnected = 101,
     
     // for publish edge
     SrsEdgeStatePublish = 200,
@@ -100,7 +102,8 @@ public:
 private:
     virtual int ingest();
     virtual void close_underlayer_socket();
-    virtual int connect_server();
+    virtual int connect_server(std::string& ep_server, std::string& ep_port);
+    virtual int connect_app(std::string ep_server, std::string ep_port);
     virtual int process_publish_message(SrsMessage* msg);
 };
 
@@ -148,7 +151,8 @@ public:
     virtual int proxy(SrsMessage* msg);
 private:
     virtual void close_underlayer_socket();
-    virtual int connect_server();
+    virtual int connect_server(std::string& ep_server, std::string& ep_port);
+    virtual int connect_app(std::string ep_server, std::string ep_port);
 };
 
 /**
@@ -165,6 +169,11 @@ public:
     SrsPlayEdge();
     virtual ~SrsPlayEdge();
 public:
+    /**
+    * always use the req of source,
+    * for we assume all client to edge is invalid,
+    * if auth open, edge must valid it from origin, then service it.
+    */
     virtual int initialize(SrsSource* source, SrsRequest* req);
     /**
     * when client play stream on edge.
@@ -213,3 +222,4 @@ public:
 };
 
 #endif
+

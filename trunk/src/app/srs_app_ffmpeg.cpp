@@ -35,20 +35,18 @@ using namespace std;
 #include <srs_kernel_error.hpp>
 #include <srs_kernel_log.hpp>
 #include <srs_app_config.hpp>
-#include <srs_protocol_rtmp.hpp>
-#include <srs_app_pithy_print.hpp>
-#include <srs_protocol_rtmp_stack.hpp>
 
-#ifdef SRS_AUTO_FFMPEG
+#ifdef SRS_AUTO_FFMPEG_STUB
 
-#define SRS_RTMP_ENCODER_COPY    "copy"
-#define SRS_RTMP_ENCODER_NO_VIDEO    "vn"
-#define SRS_RTMP_ENCODER_NO_AUDIO    "an"
+#define SRS_RTMP_ENCODER_COPY           "copy"
+#define SRS_RTMP_ENCODER_NO_VIDEO       "vn"
+#define SRS_RTMP_ENCODER_NO_AUDIO       "an"
 // only support libx264 encoder.
-#define SRS_RTMP_ENCODER_VCODEC     "libx264"
+#define SRS_RTMP_ENCODER_VCODEC         "libx264"
 // any aac encoder is ok which contains the aac,
 // for example, libaacplus, aac, fdkaac
-#define SRS_RTMP_ENCODER_ACODEC     "aac"
+#define SRS_RTMP_ENCODER_ACODEC         "aac"
+#define SRS_RTMP_ENCODER_LIBAACPLUS     "libaacplus"
 
 SrsFFMPEG::SrsFFMPEG(std::string ffmpeg_bin)
 {
@@ -76,6 +74,11 @@ void SrsFFMPEG::set_iparams(string iparams)
     _iparams = iparams;
 }
 
+void SrsFFMPEG::set_oformat(string format)
+{
+    oformat = format;
+}
+
 string SrsFFMPEG::output()
 {
     return _output;
@@ -96,21 +99,23 @@ int SrsFFMPEG::initialize_transcode(SrsConfDirective* engine)
 {
     int ret = ERROR_SUCCESS;
     
-    _srs_config->get_engine_vfilter(engine, vfilter);
-    vcodec             = _srs_config->get_engine_vcodec(engine);
-    vbitrate         = _srs_config->get_engine_vbitrate(engine);
-    vfps             = _srs_config->get_engine_vfps(engine);
-    vwidth             = _srs_config->get_engine_vwidth(engine);
-    vheight         = _srs_config->get_engine_vheight(engine);
-    vthreads         = _srs_config->get_engine_vthreads(engine);
-    vprofile         = _srs_config->get_engine_vprofile(engine);
-    vpreset         = _srs_config->get_engine_vpreset(engine);
-    _srs_config->get_engine_vparams(engine, vparams);
-    acodec             = _srs_config->get_engine_acodec(engine);
-    abitrate         = _srs_config->get_engine_abitrate(engine);
-    asample_rate     = _srs_config->get_engine_asample_rate(engine);
-    achannels         = _srs_config->get_engine_achannels(engine);
-    _srs_config->get_engine_aparams(engine, aparams);
+    iformat             = _srs_config->get_engine_iformat(engine);
+    vfilter             = _srs_config->get_engine_vfilter(engine);
+    vcodec              = _srs_config->get_engine_vcodec(engine);
+    vbitrate            = _srs_config->get_engine_vbitrate(engine);
+    vfps                = _srs_config->get_engine_vfps(engine);
+    vwidth              = _srs_config->get_engine_vwidth(engine);
+    vheight             = _srs_config->get_engine_vheight(engine);
+    vthreads            = _srs_config->get_engine_vthreads(engine);
+    vprofile            = _srs_config->get_engine_vprofile(engine);
+    vpreset             = _srs_config->get_engine_vpreset(engine);
+    vparams             = _srs_config->get_engine_vparams(engine);
+    acodec              = _srs_config->get_engine_acodec(engine);
+    abitrate            = _srs_config->get_engine_abitrate(engine);
+    asample_rate        = _srs_config->get_engine_asample_rate(engine);
+    achannels           = _srs_config->get_engine_achannels(engine);
+    aparams             = _srs_config->get_engine_aparams(engine);
+    oformat             = _srs_config->get_engine_oformat(engine);
     
     // ensure the size is even.
     vwidth -= vwidth % 2;
@@ -166,6 +171,15 @@ int SrsFFMPEG::initialize_transcode(SrsConfDirective* engine)
         }
     }
     
+    // @see, https://github.com/simple-rtmp-server/srs/issues/145
+    if (acodec == SRS_RTMP_ENCODER_LIBAACPLUS) {
+        if (abitrate < 16 || abitrate > 72) {
+            ret = ERROR_ENCODER_ABITRATE;
+            srs_error("invalid abitrate for aac: %d, must in [16, 72], ret=%d", abitrate, ret);
+            return ret;
+        }
+    }
+    
     if (acodec != SRS_RTMP_ENCODER_COPY && acodec != SRS_RTMP_ENCODER_NO_AUDIO) {
         if (acodec.find(SRS_RTMP_ENCODER_ACODEC) == std::string::npos) {
             ret = ERROR_ENCODER_ACODEC;
@@ -175,20 +189,17 @@ int SrsFFMPEG::initialize_transcode(SrsConfDirective* engine)
         }
         if (abitrate <= 0) {
             ret = ERROR_ENCODER_ABITRATE;
-            srs_error("invalid abitrate: %d, ret=%d", 
-                abitrate, ret);
+            srs_error("invalid abitrate: %d, ret=%d", abitrate, ret);
             return ret;
         }
         if (asample_rate <= 0) {
             ret = ERROR_ENCODER_ASAMPLE_RATE;
-            srs_error("invalid sample rate: %d, ret=%d", 
-                asample_rate, ret);
+            srs_error("invalid sample rate: %d, ret=%d", asample_rate, ret);
             return ret;
         }
         if (achannels != 1 && achannels != 2) {
             ret = ERROR_ENCODER_ACHANNELS;
-            srs_error("invalid achannels, must be 1 or 2, actual %d, ret=%d", 
-                achannels, ret);
+            srs_error("invalid achannels, must be 1 or 2, actual %d, ret=%d", achannels, ret);
             return ret;
         }
     }
@@ -196,6 +207,13 @@ int SrsFFMPEG::initialize_transcode(SrsConfDirective* engine)
         ret = ERROR_ENCODER_OUTPUT;
         srs_error("invalid empty output, ret=%d", ret);
         return ret;
+    }
+    
+    // for not rtmp input, donot append the iformat,
+    // for example, "-f flv" before "-i udp://192.168.1.252:2222"
+    // @see https://github.com/simple-rtmp-server/srs/issues/290
+    if (input.find("rtmp://") != 0) {
+        iformat = "";
     }
     
     return ret;
@@ -241,8 +259,10 @@ int SrsFFMPEG::start()
     }
     
     // input.
-    params.push_back("-f");
-    params.push_back("flv");
+    if (iformat != "off" && !iformat.empty()) {
+        params.push_back("-f");
+        params.push_back(iformat);
+    }
     
     params.push_back("-i");
     params.push_back(input);
@@ -342,26 +362,28 @@ int SrsFFMPEG::start()
     }
 
     // output
-    params.push_back("-f");
-    params.push_back("flv");
+    if (oformat != "off" && !oformat.empty()) {
+        params.push_back("-f");
+        params.push_back(oformat);
+    }
     
     params.push_back("-y");
     params.push_back(_output);
 
+    std::string cli;
     if (true) {
-        int pparam_size = 8 * 1024;
-        char* pparam = new char[pparam_size];
-        char* p = pparam;
-        char* last = pparam + pparam_size;
         for (int i = 0; i < (int)params.size(); i++) {
             std::string ffp = params[i];
-            snprintf(p, last - p, "%s ", ffp.c_str());
-            p += ffp.length() + 1;
+            cli += ffp;
+            if (i < (int)params.size() - 1) {
+                cli += " ";
+            }
         }
-        srs_trace("start transcoder, log: %s, params: %s", 
-            log_file.c_str(), pparam);
-        srs_freep(pparam);
+        srs_trace("start ffmpeg, log: %s, params: %s", log_file.c_str(), cli.c_str());
     }
+    
+    // for log
+    int cid = _srs_context->get_id();
     
     // TODO: fork or vfork?
     if ((pid = fork()) < 0) {
@@ -381,6 +403,19 @@ int SrsFFMPEG::start()
             srs_error("open encoder file %s failed. ret=%d", log_file.c_str(), ret);
             return ret;
         }
+        
+        // log basic info
+        if (true) {
+            char buf[4096];
+            int pos = 0;
+            pos += snprintf(buf + pos, sizeof(buf) - pos, "\n");
+            pos += snprintf(buf + pos, sizeof(buf) - pos, "ffmpeg cid=%d\n", cid);
+            pos += snprintf(buf + pos, sizeof(buf) - pos, "log=%s\n", log_file.c_str());
+            pos += snprintf(buf + pos, sizeof(buf) - pos, "params: %s\n", cli.c_str());
+            ::write(log_fd, buf, pos);
+        }
+        
+        // dup to stdout and stderr.
         if (dup2(log_fd, STDOUT_FILENO) < 0) {
             ret = ERROR_ENCODER_DUP2;
             srs_error("dup2 encoder file failed. ret=%d", ret);
@@ -391,6 +426,7 @@ int SrsFFMPEG::start()
             srs_error("dup2 encoder file failed. ret=%d", ret);
             return ret;
         }
+        
         // close log fd
         ::close(log_fd);
         // close other fds
@@ -486,4 +522,5 @@ void SrsFFMPEG::stop()
 }
 
 #endif
+
 

@@ -32,6 +32,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <string>
 
+#include <srs_protocol_stack.hpp>
+
 class SrsProtocol;
 class ISrsProtocolReaderWriter;
 class ISrsMessage;
@@ -43,6 +45,7 @@ class SrsOnMetaDataPacket;
 class SrsPlayPacket;
 class SrsMessage;
 class SrsPacket;
+class SrsAmf0Object;
 
 /**
 * the original request from client.
@@ -60,37 +63,54 @@ public:
     std::string pageUrl;
     std::string swfUrl;
     double objectEncoding;
-    
+// data discovery from request.
+public:
+    // discovery from tcUrl and play/publish.
     std::string schema;
+    // the vhost in tcUrl.
     std::string vhost;
+    // the host in tcUrl.
     std::string host;
+    // the port in tcUrl.
     std::string port;
+    // the app in tcUrl, without param.
     std::string app;
+    // the param in tcUrl(app).
+    std::string param;
+    // the stream in play/publish
     std::string stream;
-    
     // for play live stream, 
     // used to specified the stop when exceed the duration.
-    // @see https://github.com/winlinvip/simple-rtmp-server/issues/45
+    // @see https://github.com/simple-rtmp-server/srs/issues/45
     // in ms.
     double duration;
-    
+    // the token in the connect request,
+    // used for edge traverse to origin authentication,
+    // @see https://github.com/simple-rtmp-server/srs/issues/104
+    SrsAmf0Object* args;
+public:
     SrsRequest();
     virtual ~SrsRequest();
-
+public:
     /**
     * deep copy the request, for source to use it to support reload,
     * for when initialize the source, the request is valid,
     * when reload it, the request maybe invalid, so need to copy it.
     */
     virtual SrsRequest* copy();
-    
     /**
-    * disconvery vhost/app from tcUrl.
+    * update the auth info of request,
+    * to keep the current request ptr is ok,
+    * for many components use the ptr of request.
     */
-    virtual int discovery_app();
+    virtual void update_auth(SrsRequest* req);
+    /**
+    * get the stream identify, vhost/app/stream.
+    */
     virtual std::string get_stream_url();
-    
-    // strip url, user must strip when update the url.
+    /**
+    * strip url, user must strip when update the url.
+    */
     virtual void strip();
 };
 
@@ -100,8 +120,11 @@ public:
 class SrsResponse
 {
 public:
+    /**
+    * the stream id to response client createStream.
+    */
     int stream_id;
-    
+public:
     SrsResponse();
     virtual ~SrsResponse();
 };
@@ -156,32 +179,136 @@ protected:
 public:
     SrsRtmpClient(ISrsProtocolReaderWriter* skt);
     virtual ~SrsRtmpClient();
+// protocol methods proxy
 public:
-    virtual SrsProtocol* get_protocol();
+    /**
+    * set the recv timeout in us.
+    * if timeout, recv/send message return ERROR_SOCKET_TIMEOUT.
+    */
     virtual void set_recv_timeout(int64_t timeout_us);
+    /**
+    * set the send timeout in us.
+    * if timeout, recv/send message return ERROR_SOCKET_TIMEOUT.
+    */
     virtual void set_send_timeout(int64_t timeout_us);
+    /**
+    * get recv/send bytes.
+    */
     virtual int64_t get_recv_bytes();
     virtual int64_t get_send_bytes();
+    /**
+    * recv a RTMP message, which is bytes oriented.
+    * user can use decode_message to get the decoded RTMP packet.
+    * @param pmsg, set the received message, 
+    *       always NULL if error, 
+    *       NULL for unknown packet but return success.
+    *       never NULL if decode success.
+    * @remark, drop message when msg is empty or payload length is empty.
+    */
     virtual int recv_message(SrsMessage** pmsg);
+    /**
+    * decode bytes oriented RTMP message to RTMP packet,
+    * @param ppacket, output decoded packet, 
+    *       always NULL if error, never NULL if success.
+    * @return error when unknown packet, error when decode failed.
+    */
     virtual int decode_message(SrsMessage* msg, SrsPacket** ppacket);
+    /**
+    * send the RTMP message and always free it.
+    * user must never free or use the msg after this method,
+    * for it will always free the msg.
+    * @param msg, the msg to send out, never be NULL.
+    * @param stream_id, the stream id of packet to send over, 0 for control message.
+    */
     virtual int send_and_free_message(SrsMessage* msg, int stream_id);
+    /**
+    * send the RTMP packet and always free it.
+    * user must never free or use the packet after this method,
+    * for it will always free the packet.
+    * @param packet, the packet to send out, never be NULL.
+    * @param stream_id, the stream id of packet to send over, 0 for control message.
+    */
     virtual int send_and_free_packet(SrsPacket* packet, int stream_id);
 public:
-    // try complex, then simple handshake.
+    /**
+    * handshake with server, try complex, then simple handshake.
+    */
     virtual int handshake();
-    // only use simple handshake
+    /**
+    * only use simple handshake
+    */
     virtual int simple_handshake();
-    // only use complex handshake
+    /**
+    * only use complex handshake
+    */
     virtual int complex_handshake();
-    virtual int connect_app(std::string app, std::string tc_url);
+    /**
+    * set req to use the original request of client:
+    *      pageUrl and swfUrl for refer antisuck.
+    *      args for edge to origin traverse auth, @see SrsRequest.args
+    */
+    virtual int connect_app(std::string app, std::string tc_url, 
+        SrsRequest* req, bool debug_srs_upnode);
+    /**
+    * connect to server, get the debug srs info.
+    * 
+    * @param app, the app to connect at.
+    * @param tc_url, the tcUrl to connect at.
+    * @param req, the optional req object, use the swfUrl/pageUrl if specified. NULL to ignore.
+    * 
+    * SRS debug info:
+    * @param srs_server_ip, debug info, server ip client connected at.
+    * @param srs_server, server info.
+    * @param srs_primary, primary authors.
+    * @param srs_authors, authors.
+    * @param srs_id, int, debug info, client id in server log.
+    * @param srs_pid, int, debug info, server pid in log.
+    */
+    virtual int connect_app2(
+        std::string app, std::string tc_url, SrsRequest* req, bool debug_srs_upnode,
+        std::string& srs_server_ip, std::string& srs_server, std::string& srs_primary, 
+        std::string& srs_authors, std::string& srs_version, int& srs_id, 
+        int& srs_pid
+    );
+    /**
+    * create a stream, then play/publish data over this stream.
+    */
     virtual int create_stream(int& stream_id);
+    /**
+    * start play stream.
+    */
     virtual int play(std::string stream, int stream_id);
-    // flash publish schema:
-    // connect-app => create-stream => flash-publish
+    /**
+    * start publish stream. use flash publish workflow:
+    *       connect-app => create-stream => flash-publish
+    */
     virtual int publish(std::string stream, int stream_id);
-    // FMLE publish schema:
-    // connect-app => FMLE publish
+    /**
+    * start publish stream. use FMLE publish workflow:
+    *       connect-app => FMLE publish
+    */
     virtual int fmle_publish(std::string stream, int& stream_id);
+public:
+    /**
+    * expect a specified message, drop others util got specified one.
+    * @pmsg, user must free it. NULL if not success.
+    * @ppacket, store in the pmsg, user must never free it. NULL if not success.
+    * @remark, only when success, user can use and must free the pmsg/ppacket.
+    * for example:
+             SrsCommonMessage* msg = NULL;
+            SrsConnectAppResPacket* pkt = NULL;
+            if ((ret = srs_rtmp_expect_message<SrsConnectAppResPacket>(protocol, &msg, &pkt)) != ERROR_SUCCESS) {
+                return ret;
+            }
+            // use pkt
+    * user should never recv message and convert it, use this method instead.
+    * if need to set timeout, use set timeout of SrsProtocol.
+    */
+    template<class T>
+    int expect_message(SrsMessage** pmsg, T** ppacket)
+    {
+        return protocol->expect_message<T>(pmsg, ppacket);
+    }
 };
 
 /**
@@ -189,7 +316,6 @@ public:
 * a high level protocol, media stream oriented services,
 * such as connect to vhost/app, play stream, get audio/video data.
 */
-// TODO: FIXME: rename to SrsRtmpServer
 class SrsRtmpServer
 {
 private:
@@ -199,21 +325,70 @@ private:
 public:
     SrsRtmpServer(ISrsProtocolReaderWriter* skt);
     virtual ~SrsRtmpServer();
+// protocol methods proxy
 public:
-    virtual SrsProtocol* get_protocol();
+    /**
+    * set/get the recv timeout in us.
+    * if timeout, recv/send message return ERROR_SOCKET_TIMEOUT.
+    */
     virtual void set_recv_timeout(int64_t timeout_us);
     virtual int64_t get_recv_timeout();
+    /**
+    * set/get the send timeout in us.
+    * if timeout, recv/send message return ERROR_SOCKET_TIMEOUT.
+    */
     virtual void set_send_timeout(int64_t timeout_us);
     virtual int64_t get_send_timeout();
+    /**
+    * get recv/send bytes.
+    */
     virtual int64_t get_recv_bytes();
     virtual int64_t get_send_bytes();
+    /**
+    * recv a RTMP message, which is bytes oriented.
+    * user can use decode_message to get the decoded RTMP packet.
+    * @param pmsg, set the received message, 
+    *       always NULL if error, 
+    *       NULL for unknown packet but return success.
+    *       never NULL if decode success.
+    * @remark, drop message when msg is empty or payload length is empty.
+    */
     virtual int recv_message(SrsMessage** pmsg);
+    /**
+    * decode bytes oriented RTMP message to RTMP packet,
+    * @param ppacket, output decoded packet, 
+    *       always NULL if error, never NULL if success.
+    * @return error when unknown packet, error when decode failed.
+    */
     virtual int decode_message(SrsMessage* msg, SrsPacket** ppacket);
+    /**
+    * send the RTMP message and always free it.
+    * user must never free or use the msg after this method,
+    * for it will always free the msg.
+    * @param msg, the msg to send out, never be NULL.
+    * @param stream_id, the stream id of packet to send over, 0 for control message.
+    */
     virtual int send_and_free_message(SrsMessage* msg, int stream_id);
+    /**
+    * send the RTMP packet and always free it.
+    * user must never free or use the packet after this method,
+    * for it will always free the packet.
+    * @param packet, the packet to send out, never be NULL.
+    * @param stream_id, the stream id of packet to send over, 0 for control message.
+    */
     virtual int send_and_free_packet(SrsPacket* packet, int stream_id);
 public:
+    /**
+    * handshake with client, try complex then simple.
+    */
     virtual int handshake();
+    /**
+    * do connect app with client, to discovery tcUrl.
+    */
     virtual int connect_app(SrsRequest* req);
+    /**
+    * set ack size to client, client will send ack-size for each ack window
+    */
     virtual int set_window_ack_size(int ack_size);
     /**
     * @type: The sender can mark this message hard (0), soft (1), or dynamic (2)
@@ -224,7 +399,13 @@ public:
     * @param server_ip the ip of server.
     */
     virtual int response_connect_app(SrsRequest* req, const char* server_ip = NULL);
+    /**
+    * reject the connect app request.
+    */
     virtual void response_connect_reject(SrsRequest* req, const char* desc);
+    /**
+    * response client the onBWDone message.
+    */
     virtual int on_bw_done();
     /**
     * recv some message to identify the client.
@@ -277,6 +458,27 @@ public:
     * onStatus(NetStream.Publish.Start)
     */
     virtual int start_flash_publish(int stream_id);
+public:
+    /**
+    * expect a specified message, drop others util got specified one.
+    * @pmsg, user must free it. NULL if not success.
+    * @ppacket, store in the pmsg, user must never free it. NULL if not success.
+    * @remark, only when success, user can use and must free the pmsg/ppacket.
+    * for example:
+             SrsCommonMessage* msg = NULL;
+            SrsConnectAppResPacket* pkt = NULL;
+            if ((ret = srs_rtmp_expect_message<SrsConnectAppResPacket>(protocol, &msg, &pkt)) != ERROR_SUCCESS) {
+                return ret;
+            }
+            // use pkt
+    * user should never recv message and convert it, use this method instead.
+    * if need to set timeout, use set timeout of SrsProtocol.
+    */
+    template<class T>
+    int expect_message(SrsMessage** pmsg, T** ppacket)
+    {
+        return protocol->expect_message<T>(pmsg, ppacket);
+    }
 private:
     virtual int identify_create_stream_client(SrsCreateStreamPacket* req, int stream_id, SrsRtmpConnType& type, std::string& stream_name, double& duration);
     virtual int identify_fmle_publish_client(SrsFMLEStartPacket* req, SrsRtmpConnType& type, std::string& stream_name);
@@ -286,3 +488,4 @@ private:
 };
 
 #endif
+

@@ -32,8 +32,16 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <vector>
 #include <string>
+#include <sstream>
 
 #include <sys/resource.h>
+
+#include <srs_app_st.hpp>
+
+class SrsKbps;
+
+// client open socket and connect to server.
+extern int srs_socket_connect(std::string server, int port, int64_t timeout, st_netfd_t* pstfd);
 
 /**
 * convert level in string to log level in int.
@@ -41,6 +49,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 extern int srs_get_log_level(std::string level);
 
+// current process resouce usage.
 // @see: man getrusage
 class SrsRusage
 {
@@ -50,8 +59,10 @@ public:
     // the time in ms when sample.
     int64_t sample_time;
     
+public:
     rusage r;
     
+public:
     SrsRusage();
 };
 
@@ -60,6 +71,7 @@ extern SrsRusage* srs_get_system_rusage();
 // the deamon st-thread will update it.
 extern void srs_update_system_rusage();
 
+// to stat the process info.
 // @see: man 5 proc, /proc/[pid]/stat
 class SrsProcSelfStat
 {
@@ -71,6 +83,8 @@ public:
     // the percent of usage. 0.153 is 15.3%.
     float percent;
     
+// data of /proc/[pid]/stat
+public:
     // pid %d      The process ID.
     int pid;
     // comm %s     The  filename  of  the  executable,  in parentheses. This is visible whether or not the executable is
@@ -79,7 +93,7 @@ public:
     // state %c    One character from the string "RSDZTW" where R is running, S is sleeping in an interruptible  wait,  D
     //             is  waiting in uninterruptible disk sleep, Z is zombie, T is traced or stopped (on a signal), and W is
     //             paging.
-    char state;
+    unsigned char state;
     // ppid %d     The PID of the parent.
     int ppid;
     // pgrp %d     The process group ID of the process.
@@ -209,10 +223,41 @@ public:
     //             Guest time of the process’s children, measured in clock ticks (divide by sysconf(_SC_CLK_TCK).
     long cguest_time;
     
+public:
     SrsProcSelfStat();
 };
 
+// to stat the cpu time.
 // @see: man 5 proc, /proc/stat
+/**
+* about the cpu time, @see: http://stackoverflow.com/questions/16011677/calculating-cpu-usage-using-proc-files
+* for example, for ossrs.net, a single cpu machine:
+*       [winlin@SRS ~]$ cat /proc/uptime && cat /proc/stat
+*           5275153.01 4699624.99
+*           cpu  43506750 973 8545744 466133337 4149365 190852 804666 0 0
+* where the uptime is 5275153.01s
+* generally, USER_HZ sysconf(_SC_CLK_TCK)=100, which means the unit of /proc/stat is "1/100ths seconds"
+*       that is, USER_HZ=1/100 seconds
+* cpu total = 43506750+973+8545744+466133337+4149365+190852+804666+0+0 (USER_HZ)
+*           = 523331687 (USER_HZ)
+*           = 523331687 * 1/100 (seconds)
+*           = 5233316.87 seconds
+* the cpu total seconds almost the uptime, the delta is more precise.
+* 
+* we run the command about 26minutes:
+*       [winlin@SRS ~]$ cat /proc/uptime && cat /proc/stat
+*           5276739.83 4701090.76
+*           cpu  43514105 973 8548948 466278556 4150480 190899 804937 0 0
+* where the uptime is 5276739.83s
+* cpu total = 43514105+973+8548948+466278556+4150480+190899+804937+0+0 (USER_HZ)
+*           = 523488898 (USER_HZ)
+*           = 523488898 * 1/100 (seconds)
+*           = 5234888.98 seconds
+* where:
+*       uptime delta = 1586.82s
+*       cpu total delta = 1572.11s
+* the deviation is more smaller.
+*/
 class SrsProcSystemStat
 {
 public:
@@ -221,43 +266,54 @@ public:
     // the time in ms when sample.
     int64_t sample_time;
     // the percent of usage. 0.153 is 15.3%.
+    // the percent is in [0, 1], where 1 is 100%.
+    // for multiple core cpu, max also is 100%.
     float percent;
+    // the total cpu time units
+    // @remark, zero for the previous total() is zero.
+    //          the usaged_cpu_delta = total_delta * percent
+    //          previous cpu total = this->total() - total_delta
+    int64_t total_delta;
     
-    // always be cpu
-    char label[32];
-    
-    //The amount of time, measured in units  of  USER_HZ  (1/100ths  of  a  second  on  most  architectures,  use
+// data of /proc/stat
+public:
+    // The amount of time, measured in units  of  USER_HZ  
+    // (1/100ths  of  a  second  on  most  architectures,  use
     // sysconf(_SC_CLK_TCK)  to  obtain  the  right value)
     //
     // the system spent in user mode, 
-    unsigned long user;
+    unsigned long long user;
     // user mode with low priority (nice), 
-    unsigned long nice;
+    unsigned long long nice;
     // system mode, 
-    unsigned long sys;
+    unsigned long long sys;
     // and the idle task, respectively.
-    unsigned long idle;
+    unsigned long long idle;
 
     // In  Linux 2.6 this line includes three additional columns:
     //
     // iowait - time waiting for I/O to complete (since 2.5.41);
-    unsigned long iowait;
+    unsigned long long iowait;
     // irq - time servicing interrupts (since 2.6.0-test4); 
-    unsigned long irq;
+    unsigned long long irq;
     // softirq  -  time  servicing  softirqs  (since 2.6.0-test4).
-    unsigned long softirq;
+    unsigned long long softirq;
     
     // Since  Linux 2.6.11, there is an eighth column,
     // steal - stolen time, which is the time spent in other oper-
     // ating systems when running in a virtualized environment
-    unsigned long steal;
+    unsigned long long steal;
     
     // Since Linux 2.6.24, there is a ninth column, 
     // guest, which is the time spent running a virtual CPU for guest
     // operating systems under the control of the Linux kernel.
-    unsigned long guest;
+    unsigned long long guest;
 
+public:
     SrsProcSystemStat();
+    
+    // get total cpu units.
+    int64_t total();
 };
 
 // get system cpu stat, use cache to avoid performance problem.
@@ -267,6 +323,114 @@ extern SrsProcSystemStat* srs_get_system_proc_stat();
 // the deamon st-thread will update it.
 extern void srs_update_proc_stat();
 
+// stat disk iops
+// @see: http://stackoverflow.com/questions/4458183/how-the-util-of-iostat-is-computed
+// for total disk io, @see: cat /proc/vmstat |grep pgpg
+// for device disk io, @see: cat /proc/diskstats
+// @remark, user can use command to test the disk io:
+//      time dd if=/dev/zero bs=1M count=2048 of=file_2G
+// @remark, the iotop is right, the dstat result seems not ok,
+//      while the iostat only show the number of writes, not the bytes,
+//      where the dd command will give the write MBps, it's absolutely right.
+class SrsDiskStat
+{
+public:
+    // whether the data is ok.
+    bool ok;
+    // the time in ms when sample.
+    int64_t sample_time;
+    
+    // input(read) KBytes per seconds
+    int in_KBps;
+    // output(write) KBytes per seconds
+    int out_KBps;
+    
+    // @see: print_partition_stats() of iostat.c
+    // but its value is [0, +], for instance, 0.1532 means 15.32%.
+    float busy;
+    // for stat the busy%
+    SrsProcSystemStat cpu;
+    
+public:
+    // @see: cat /proc/vmstat
+    // the in(read) page count, pgpgin*1024 is the read bytes.
+    // Total number of kilobytes the system paged in from disk per second.
+    unsigned long pgpgin;
+    // the out(write) page count, pgpgout*1024 is the write bytes.
+    // Total number of kilobytes the system paged out to disk per second.
+    unsigned long pgpgout;
+    
+    // @see: https://www.kernel.org/doc/Documentation/iostats.txt
+    // @see: http://tester-higkoo.googlecode.com/svn-history/r14/trunk/Tools/iostat/iostat.c
+    // @see: cat /proc/diskstats
+    //
+    // Number of issued reads. 
+    // This is the total number of reads completed successfully.
+    // Read I/O operations
+    unsigned int rd_ios;
+    // Number of reads merged
+    // Reads merged
+    unsigned int rd_merges;
+    // Number of sectors read. 
+    // This is the total number of sectors read successfully.
+    // Sectors read
+    unsigned long long rd_sectors;
+    // Number of milliseconds spent reading. 
+    // This is the total number of milliseconds spent by all reads 
+    // (as measured from __make_request() to end_that_request_last()).
+    // Time in queue + service for read
+    unsigned int rd_ticks;
+    //
+    // Number of writes completed. 
+    // This is the total number of writes completed successfully
+    // Write I/O operations
+    unsigned int wr_ios;
+    // Number of writes merged Reads and writes which are adjacent 
+    // to each other may be merged for efficiency. Thus two 4K 
+    // reads may become one 8K read before it is ultimately 
+    // handed to the disk, and so it will be counted (and queued) 
+    // as only one I/O. This field lets you know how often this was done.
+    // Writes merged
+    unsigned int wr_merges;
+    // Number of sectors written. 
+    // This is the total number of sectors written successfully.
+    // Sectors written
+    unsigned long long wr_sectors;
+    // Number of milliseconds spent writing . 
+    // This is the total number of milliseconds spent by all writes 
+    // (as measured from __make_request() to end_that_request_last()).
+    // Time in queue + service for write
+    unsigned int wr_ticks;
+    //
+    // Number of I/Os currently in progress. 
+    // The only field that should go to zero. 
+    // Incremented as requests are given to appropriate request_queue_t 
+    // and decremented as they finish.
+    unsigned int nb_current;
+    // Number of milliseconds spent doing I/Os. 
+    // This field is increased so long as field 9 is nonzero.
+    // Time of requests in queue
+    unsigned int ticks;
+    // Number of milliseconds spent doing I/Os. 
+    // This field is incremented at each I/O start, I/O completion, 
+    // I/O merge, or read of these stats by the number of I/Os in 
+    // progress (field 9) times the number of milliseconds spent 
+    // doing I/O since the last update of this field. This can 
+    // provide an easy measure of both I/O completion time and 
+    // the backlog that may be accumulating.
+    // Average queue length
+    unsigned int aveq;
+
+public:
+    SrsDiskStat();
+};
+
+// get disk stat, use cache to avoid performance problem.
+extern SrsDiskStat* srs_get_disk_stat();
+// the deamon st-thread will update it.
+extern void srs_update_disk_stat();
+
+// stat system memory info
 // @see: cat /proc/meminfo 
 class SrsMemInfo
 {
@@ -279,23 +443,26 @@ public:
     float percent_ram;
     float percent_swap;
     
+// data of /proc/meminfo
+public:
     // MemActive = MemTotal - MemFree
-    int64_t MemActive;
+    u_int64_t MemActive;
     // RealInUse = MemActive - Buffers - Cached
-    int64_t RealInUse;
+    u_int64_t RealInUse;
     // NotInUse = MemTotal - RealInUse
     //          = MemTotal - MemActive + Buffers + Cached
     //          = MemTotal - MemTotal + MemFree + Buffers + Cached
     //          = MemFree + Buffers + Cached
-    int64_t NotInUse;
+    u_int64_t NotInUse;
     
-    int64_t MemTotal;
-    int64_t MemFree;
-    int64_t Buffers;
-    int64_t Cached;
-    int64_t SwapTotal;
-    int64_t SwapFree;
+    unsigned long MemTotal;
+    unsigned long MemFree;
+    unsigned long Buffers;
+    unsigned long Cached;
+    unsigned long SwapTotal;
+    unsigned long SwapFree;
     
+public:
     SrsMemInfo();
 };
 
@@ -304,25 +471,30 @@ extern SrsMemInfo* srs_get_meminfo();
 // the deamon st-thread will update it.
 extern void srs_update_meminfo();
 
+// system cpu hardware info.
 // @see: cat /proc/cpuinfo 
+// @remark, we use sysconf(_SC_NPROCESSORS_CONF) to get the cpu count.
 class SrsCpuInfo
 {
 public:
     // whether the data is ok.
     bool ok;
     
+// data of /proc/cpuinfo
+public:
     // The number of processors configured.
     int nb_processors;
     // The number of processors currently online (available).
     int nb_processors_online;
     
+public:
     SrsCpuInfo();
 };
 
 // get system cpu info, use cache to avoid performance problem.
 extern SrsCpuInfo* srs_get_cpuinfo();
 
-// platform(os, srs) summary
+// platform(os, srs) uptime/load summary
 class SrsPlatformInfo
 {
 public:
@@ -332,8 +504,13 @@ public:
     // srs startup time, in ms.
     int64_t srs_startup_time;
     
+public:
     // @see: cat /proc/uptime
+    // system startup time in seconds.
     double os_uptime;
+    // system all cpu idle time in seconds.
+    // @remark to cal the cpu ustime percent:
+    //      os_ilde_time % (os_uptime * SrsCpuInfo.nb_processors_online)
     double os_ilde_time;
     
     // @see: cat /proc/loadavg
@@ -341,6 +518,7 @@ public:
     double load_five_minutes;
     double load_fifteen_minutes;
     
+public:
     SrsPlatformInfo();
 };
 
@@ -349,14 +527,106 @@ extern SrsPlatformInfo* srs_get_platform_info();
 // the deamon st-thread will update it.
 extern void srs_update_platform_info();
 
+// network device summary for each network device,
+// for example, eth0, eth1, ethN
+class SrsNetworkDevices
+{
+public:
+    // whether the network device is ok.
+    bool ok;
+    
+    // 6-chars interfaces name
+    char name[7];
+    // the sample time in ms.
+    int64_t sample_time;
+    
+public:
+    // data for receive.
+    unsigned long long rbytes;
+    unsigned long rpackets;
+    unsigned long rerrs;
+    unsigned long rdrop;
+    unsigned long rfifo;
+    unsigned long rframe;
+    unsigned long rcompressed;
+    unsigned long rmulticast;
+    
+    // data for transmit
+    unsigned long long sbytes;
+    unsigned long spackets;
+    unsigned long serrs;
+    unsigned long sdrop;
+    unsigned long sfifo;
+    unsigned long scolls;
+    unsigned long scarrier;
+    unsigned long scompressed;
+    
+public:
+    SrsNetworkDevices();
+};
+
+// get network devices info, use cache to avoid performance problem.
+extern SrsNetworkDevices* srs_get_network_devices();
+extern int srs_get_network_devices_count();
+// the deamon st-thread will update it.
+extern void srs_update_network_devices();
+
+// system connections, and srs rtmp network summary
+class SrsNetworkRtmpServer
+{
+public:
+    // whether the network device is ok.
+    bool ok;
+    
+    // the sample time in ms.
+    int64_t sample_time;
+    
+public:
+    // data for receive.
+    int64_t rbytes;
+    int rkbps;
+    int rkbps_30s;
+    int rkbps_5m;
+    
+    // data for transmit
+    int64_t sbytes;
+    int skbps;
+    int skbps_30s;
+    int skbps_5m;
+    
+    // connections
+    // @see: /proc/net/snmp
+    // @see: /proc/net/sockstat
+    int nb_conn_sys;
+    int nb_conn_sys_et; // established
+    int nb_conn_sys_tw; // time wait
+    int nb_conn_sys_udp; // udp
+
+    // retrieve from srs interface
+    int nb_conn_srs;
+    
+public:
+    SrsNetworkRtmpServer();
+};
+    
+// get network devices info, use cache to avoid performance problem.
+extern SrsNetworkRtmpServer* srs_get_network_rtmp_server();
+// the deamon st-thread will update it.
+extern void srs_update_rtmp_server(int nb_conn, SrsKbps* kbps);
+
 // get local ip, fill to @param ips
-extern void srs_retrieve_local_ipv4_ips();
 extern std::vector<std::string>& srs_get_local_ipv4_ips();
 
 // get local or peer ip.
 // where local ip is the server ip which client connected.
-std::string srs_get_local_ip(int fd);
+extern std::string srs_get_local_ip(int fd);
+// get the local id port.
+extern int srs_get_local_port(int fd);
 // where peer ip is the client public ip which connected to server.
-std::string srs_get_peer_ip(int fd);
+extern std::string srs_get_peer_ip(int fd);
+
+// dump summaries for /api/v1/summaries.
+extern void srs_api_dump_summaries(std::stringstream& ss);
 
 #endif
+

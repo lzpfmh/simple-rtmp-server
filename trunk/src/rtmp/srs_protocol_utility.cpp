@@ -24,15 +24,57 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <srs_protocol_utility.hpp>
 
 #include <stdlib.h>
+using namespace std;
 
 #include <srs_kernel_log.hpp>
 #include <srs_kernel_utility.hpp>
 
-void srs_vhost_resolve(std::string& vhost, std::string& app)
-{
-    app = srs_string_replace(app, "...", "?");
+void srs_discovery_tc_url(
+    string tcUrl, 
+    string& schema, string& host, string& vhost, 
+    string& app, string& port, std::string& param
+) {
+    size_t pos = std::string::npos;
+    std::string url = tcUrl;
     
+    if ((pos = url.find("://")) != std::string::npos) {
+        schema = url.substr(0, pos);
+        url = url.substr(schema.length() + 3);
+        srs_info("discovery schema=%s", schema.c_str());
+    }
+    
+    if ((pos = url.find("/")) != std::string::npos) {
+        host = url.substr(0, pos);
+        url = url.substr(host.length() + 1);
+        srs_info("discovery host=%s", host.c_str());
+    }
+
+    port = SRS_CONSTS_RTMP_DEFAULT_PORT;
+    if ((pos = host.find(":")) != std::string::npos) {
+        port = host.substr(pos + 1);
+        host = host.substr(0, pos);
+        srs_info("discovery host=%s, port=%s", host.c_str(), port.c_str());
+    }
+    
+    app = url;
+    vhost = host;
+    srs_vhost_resolve(vhost, app, param);
+}
+
+void srs_vhost_resolve(string& vhost, string& app, string& param)
+{
+    // get original param
     size_t pos = 0;
+    if ((pos = app.find("?")) != std::string::npos) {
+        param = app.substr(pos);
+    }
+    
+    // filter tcUrl
+    app = srs_string_replace(app, ",", "?");
+    app = srs_string_replace(app, "...", "?");
+    app = srs_string_replace(app, "&&", "?");
+    app = srs_string_replace(app, "=", "?");
+    
     if ((pos = app.find("?")) == std::string::npos) {
         return;
     }
@@ -40,14 +82,13 @@ void srs_vhost_resolve(std::string& vhost, std::string& app)
     std::string query = app.substr(pos + 1);
     app = app.substr(0, pos);
     
-    if ((pos = query.find("vhost?")) != std::string::npos
-        || (pos = query.find("vhost=")) != std::string::npos
-        || (pos = query.find("Vhost?")) != std::string::npos
-        || (pos = query.find("Vhost=")) != std::string::npos
-    ) {
+    if ((pos = query.find("vhost?")) != std::string::npos) {
         query = query.substr(pos + 6);
         if (!query.empty()) {
             vhost = query;
+        }
+        if ((pos = vhost.find("?")) != std::string::npos) {
+            vhost = vhost.substr(0, pos);
         }
     }
 }
@@ -61,13 +102,56 @@ void srs_random_generate(char* bytes, int size)
         srs_trace("srand initialized the random.");
     }
     
-    static char cdata[]  = { 
-        0x73, 0x69, 0x6d, 0x70, 0x6c, 0x65, 0x2d, 0x72, 0x74, 0x6d, 0x70, 0x2d, 0x73, 0x65, 
-        0x72, 0x76, 0x65, 0x72, 0x2d, 0x77, 0x69, 0x6e, 0x6c, 0x69, 0x6e, 0x2d, 0x77, 0x69, 
-        0x6e, 0x74, 0x65, 0x72, 0x73, 0x65, 0x72, 0x76, 0x65, 0x72, 0x40, 0x31, 0x32, 0x36, 
-        0x2e, 0x63, 0x6f, 0x6d
-    };
     for (int i = 0; i < size; i++) {
-        bytes[i] = cdata[rand() % (sizeof(cdata) - 1)];
+        // the common value in [0x0f, 0xf0]
+        bytes[i] = 0x0f + (rand() % (256 - 0x0f - 0x0f));
     }
 }
+
+string srs_generate_tc_url(string ip, string vhost, string app, string port, string param)
+{
+    string tcUrl = "rtmp://";
+    
+    if (vhost == SRS_CONSTS_RTMP_DEFAULT_VHOST) {
+        tcUrl += ip;
+    } else {
+        tcUrl += vhost;
+    }
+    
+    if (port != SRS_CONSTS_RTMP_DEFAULT_PORT) {
+        tcUrl += ":";
+        tcUrl += port;
+    }
+    
+    tcUrl += "/";
+    tcUrl += app;
+    tcUrl += param;
+    
+    return tcUrl;
+}
+
+/**
+* compare the memory in bytes.
+*/
+bool srs_bytes_equals(void* pa, void* pb, int size)
+{
+    u_int8_t* a = (u_int8_t*)pa;
+    u_int8_t* b = (u_int8_t*)pb;
+    
+    if (!a && !b) {
+        return true;
+    }
+    
+    if (!a || !b) {
+        return false;
+    }
+    
+    for(int i = 0; i < size; i++){
+        if(a[i] != b[i]){
+            return false;
+        }
+    }
+
+    return true;
+}
+

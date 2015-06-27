@@ -119,12 +119,6 @@ ok_msg "test \" ${item} \""
 ret=$?; if [[ $ret -ne 0 ]]; then failed_msg "test \" ${item} \" failed. ret=$ret"; exit $ret; fi
 ok_msg "test \" ${item} \" success"
 
-item="./configure --fast --with-bwtc"
-ok_msg "test \" ${item} \""
-(./configure --fast --with-bwtc && make) >>$log 2>&1
-ret=$?; if [[ $ret -ne 0 ]]; then failed_msg "test \" ${item} \" failed. ret=$ret"; exit $ret; fi
-ok_msg "test \" ${item} \" success"
-
 item="./configure --fast --with-research"
 ok_msg "test \" ${item} \""
 (./configure --fast --with-research && make) >>$log 2>&1
@@ -173,6 +167,30 @@ ok_msg "test \" ${item} \""
 ret=$?; if [[ $ret -ne 0 ]]; then failed_msg "test \" ${item} \" failed. ret=$ret"; exit $ret; fi
 ok_msg "test \" ${item} \" success"
 
+item="./configure --fast --log-verbose"
+ok_msg "test \" ${item} \""
+(./configure --fast --log-verbose && make) >>$log 2>&1
+ret=$?; if [[ $ret -ne 0 ]]; then failed_msg "test \" ${item} \" failed. ret=$ret"; exit $ret; fi
+ok_msg "test \" ${item} \" success"
+
+item="./configure --fast --log-info"
+ok_msg "test \" ${item} \""
+(./configure --fast --log-info && make) >>$log 2>&1
+ret=$?; if [[ $ret -ne 0 ]]; then failed_msg "test \" ${item} \" failed. ret=$ret"; exit $ret; fi
+ok_msg "test \" ${item} \" success"
+
+item="./configure --fast --log-trace"
+ok_msg "test \" ${item} \""
+(./configure --fast --log-trace && make) >>$log 2>&1
+ret=$?; if [[ $ret -ne 0 ]]; then failed_msg "test \" ${item} \" failed. ret=$ret"; exit $ret; fi
+ok_msg "test \" ${item} \" success"
+
+item="./configure --fast --log-info --log-verbose --log-trace"
+ok_msg "test \" ${item} \""
+(./configure --fast --log-info --log-verbose --log-trace && make) >>$log 2>&1
+ret=$?; if [[ $ret -ne 0 ]]; then failed_msg "test \" ${item} \" failed. ret=$ret"; exit $ret; fi
+ok_msg "test \" ${item} \" success"
+
 #######################################################################################################
 #######################################################################################################
 #######################################################################################################
@@ -182,9 +200,21 @@ ok_msg "test \" ${item} \""
 ret=$?; if [[ $ret -ne 0 ]]; then failed_msg "test \" ${item} \" failed. ret=$ret"; exit $ret; fi
 ok_msg "test \" ${item} \" success"
 
+item="./configure --fast-dev"
+ok_msg "test \" ${item} \""
+(./configure --fast-dev && make) >>$log 2>&1
+ret=$?; if [[ $ret -ne 0 ]]; then failed_msg "test \" ${item} \" failed. ret=$ret"; exit $ret; fi
+ok_msg "test \" ${item} \" success"
+
+item="./configure --demo"
+ok_msg "test \" ${item} \""
+(./configure --demo && make) >>$log 2>&1
+ret=$?; if [[ $ret -ne 0 ]]; then failed_msg "test \" ${item} \" failed. ret=$ret"; exit $ret; fi
+ok_msg "test \" ${item} \" success"
+
 item="./configure --full"
 ok_msg "test \" ${item} \""
-(./configure --dev && make) >>$log 2>&1
+(./configure --full && make) >>$log 2>&1
 ret=$?; if [[ $ret -ne 0 ]]; then failed_msg "test \" ${item} \" failed. ret=$ret"; exit $ret; fi
 ok_msg "test \" ${item} \" success"
 

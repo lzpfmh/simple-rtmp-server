@@ -80,17 +80,21 @@ SrsFastLog::~SrsFastLog()
         fd = -1;
     }
 
-    _srs_config->unsubscribe(this);
+    if (_srs_config) {
+        _srs_config->unsubscribe(this);
+    }
 }
 
 int SrsFastLog::initialize()
 {
     int ret = ERROR_SUCCESS;
     
-    _srs_config->subscribe(this);
-
-    log_to_file_tank = _srs_config->get_log_tank_file();
-    _level = srs_get_log_level(_srs_config->get_log_level());
+    if (_srs_config) {
+        _srs_config->subscribe(this);
+    
+        log_to_file_tank = _srs_config->get_log_tank_file();
+        _level = srs_get_log_level(_srs_config->get_log_level());
+    }
     
     return ret;
 }
@@ -193,7 +197,9 @@ void SrsFastLog::error(const char* tag, int context_id, const char* fmt, ...)
     va_end(ap);
 
     // add strerror() to error msg.
-    size += snprintf(log_data + size, LOG_MAX_SIZE - size, "(%s)", strerror(errno));
+    if (errno != 0) {
+        size += snprintf(log_data + size, LOG_MAX_SIZE - size, "(%s)", strerror(errno));
+    }
 
     write_log(fd, log_data, size, SrsLogLevel::Error);
 }
@@ -201,6 +207,10 @@ void SrsFastLog::error(const char* tag, int context_id, const char* fmt, ...)
 int SrsFastLog::on_reload_log_tank()
 {
     int ret = ERROR_SUCCESS;
+    
+    if (!_srs_config) {
+        return ret;
+    }
 
     bool tank = log_to_file_tank;
     log_to_file_tank = _srs_config->get_log_tank_file();
@@ -225,6 +235,10 @@ int SrsFastLog::on_reload_log_level()
 {
     int ret = ERROR_SUCCESS;
     
+    if (!_srs_config) {
+        return ret;
+    }
+    
     _level = srs_get_log_level(_srs_config->get_log_level());
     
     return ret;
@@ -233,6 +247,10 @@ int SrsFastLog::on_reload_log_level()
 int SrsFastLog::on_reload_log_file()
 {
     int ret = ERROR_SUCCESS;
+    
+    if (!_srs_config) {
+        return ret;
+    }
 
     if (!log_to_file_tank) {
         return ret;
@@ -308,7 +326,6 @@ void SrsFastLog::write_log(int& fd, char *str_log, int size, int level)
     
     // add some to the end of char.
     str_log[size++] = LOG_TAIL;
-    str_log[size++] = 0;
     
     // if not to file, to console and return.
     if (!log_to_file_tank) {
@@ -318,11 +335,11 @@ void SrsFastLog::write_log(int& fd, char *str_log, int size, int level)
         // \033[33m : yellow text code in shell
         // \033[0m : normal text code
         if (level <= SrsLogLevel::Trace) {
-            printf("%s", str_log);
+            printf("%.*s", size, str_log);
         } else if (level == SrsLogLevel::Warn) {
-            printf("\033[33m%s\033[0m", str_log);
+            printf("\033[33m%.*s\033[0m", size, str_log);
         } else{
-            printf("\033[31m%s\033[0m", str_log);
+            printf("\033[31m%.*s\033[0m", size, str_log);
         }
 
         return;
@@ -341,6 +358,10 @@ void SrsFastLog::write_log(int& fd, char *str_log, int size, int level)
 
 void SrsFastLog::open_log_file()
 {
+    if (!_srs_config) {
+        return;
+    }
+    
     std::string filename = _srs_config->get_log_file();
     
     if (filename.empty()) {
@@ -356,3 +377,4 @@ void SrsFastLog::open_log_file()
         );
     }
 }
+

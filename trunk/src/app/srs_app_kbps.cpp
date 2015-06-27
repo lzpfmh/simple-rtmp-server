@@ -23,10 +23,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <srs_app_kbps.hpp>
 
-#include <srs_kernel_error.hpp>
-#include <srs_kernel_log.hpp>
-#include <srs_protocol_io.hpp>
 #include <srs_kernel_utility.hpp>
+#include <srs_app_st.hpp>
+
+#define _SRS_BANDWIDTH_LIMIT_INTERVAL_MS 100
 
 SrsKbpsSample::SrsKbpsSample()
 {
@@ -38,7 +38,7 @@ SrsKbpsSlice::SrsKbpsSlice()
 {
     io.in = NULL;
     io.out = NULL;
-    last_bytes = io_bytes_base = starttime = bytes = 0;
+    last_bytes = io_bytes_base = starttime = bytes = delta_bytes = 0;
 }
 
 SrsKbpsSlice::~SrsKbpsSlice()
@@ -98,6 +98,14 @@ void SrsKbpsSlice::sample()
     }
 }
 
+IKbpsDelta::IKbpsDelta()
+{
+}
+
+IKbpsDelta::~IKbpsDelta()
+{
+}
+
 SrsKbps::SrsKbps()
 {
 }
@@ -106,7 +114,7 @@ SrsKbps::~SrsKbps()
 {
 }
 
-void SrsKbps::set_io(ISrsProtocolReader* in, ISrsProtocolWriter* out)
+void SrsKbps::set_io(ISrsProtocolStatistic* in, ISrsProtocolStatistic* out)
 {
     // set input stream
     // now, set start time.
@@ -165,22 +173,22 @@ int SrsKbps::get_recv_kbps()
     return bytes * 8 / duration;
 }
 
-int SrsKbps::get_send_kbps_sample_high()
+int SrsKbps::get_send_kbps_30s()
 {
     return os.sample_30s.kbps;
 }
 
-int SrsKbps::get_recv_kbps_sample_high()
+int SrsKbps::get_recv_kbps_30s()
 {
     return is.sample_30s.kbps;
 }
 
-int SrsKbps::get_send_kbps_sample_medium()
+int SrsKbps::get_send_kbps_5m()
 {
     return os.sample_5m.kbps;
 }
 
-int SrsKbps::get_recv_kbps_sample_medium()
+int SrsKbps::get_recv_kbps_5m()
 {
     return is.sample_5m.kbps;
 }
@@ -195,14 +203,37 @@ int64_t SrsKbps::get_recv_bytes()
     return is.get_total_bytes();
 }
 
+int64_t SrsKbps::get_send_bytes_delta()
+{
+    int64_t delta = os.get_total_bytes() - os.delta_bytes;
+    os.delta_bytes = os.get_total_bytes();
+    return delta;
+}
+
+int64_t SrsKbps::get_recv_bytes_delta()
+{
+    int64_t delta = is.get_total_bytes() - is.delta_bytes;
+    is.delta_bytes = is.get_total_bytes();
+    return delta;
+}
+
+void SrsKbps::add_delta(IKbpsDelta* delta)
+{
+    srs_assert(delta);
+    
+    // update the total bytes
+    is.last_bytes += delta->get_recv_bytes_delta();
+    os.last_bytes += delta->get_send_bytes_delta();
+    
+    // we donot sample, please use sample() to do resample.
+}
+
 void SrsKbps::sample()
 {
+    // update the total bytes
     if (os.io.out) {
         os.last_bytes = os.io.out->get_send_bytes();
     }
-    
-    // resample
-    os.sample();
     
     if (is.io.in) {
         is.last_bytes = is.io.in->get_recv_bytes();
@@ -210,5 +241,44 @@ void SrsKbps::sample()
     
     // resample
     is.sample();
+    os.sample();
 }
+
+SrsKbpsLimit::SrsKbpsLimit(SrsKbps* kbps, int limit_kbps)
+{
+    _kbps = kbps;
+    _limit_kbps = limit_kbps;
+}
+
+SrsKbpsLimit::~SrsKbpsLimit()
+{
+}
+
+int SrsKbpsLimit::limit_kbps()
+{
+    return _limit_kbps;
+}
+
+void SrsKbpsLimit::recv_limit()
+{
+    _kbps->sample();
+    
+    while (_kbps->get_recv_kbps() > _limit_kbps) {
+        _kbps->sample();
+        
+        st_usleep(_SRS_BANDWIDTH_LIMIT_INTERVAL_MS * 1000);
+    }
+}
+
+void SrsKbpsLimit::send_limit()
+{
+    _kbps->sample();
+    
+    while (_kbps->get_send_kbps() > _limit_kbps) {
+        _kbps->sample();
+        
+        st_usleep(_SRS_BANDWIDTH_LIMIT_INTERVAL_MS * 1000);
+    }
+}
+
 

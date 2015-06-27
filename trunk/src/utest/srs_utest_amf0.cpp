@@ -22,6 +22,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 #include <srs_utest_amf0.hpp>
 
+#ifdef ENABLE_UTEST_AMF0
+
 #include <string>
 using namespace std;
 
@@ -29,8 +31,11 @@ using namespace std;
 #include <srs_kernel_error.hpp>
 #include <srs_kernel_stream.hpp>
 
-// user scenario: coding and decoding with amf0
-VOID TEST(AMF0Test, ScenarioMain)
+/**
+* main scenario to use amf0.
+* user scenario: coding and decoding with amf0
+*/
+VOID TEST(ProtocolAMF0Test, ScenarioMain)
 {
     // coded amf0 object
     int nb_bytes = 0;
@@ -171,7 +176,10 @@ VOID TEST(AMF0Test, ScenarioMain)
     }
 }
 
-VOID TEST(AMF0Test, ApiSize) 
+/**
+* to calc the size of amf0 instances.
+*/
+VOID TEST(ProtocolAMF0Test, ApiSize) 
 {
     // size of elem
     EXPECT_EQ(2+6, SrsAmf0Size::utf8("winlin"));
@@ -427,7 +435,10 @@ VOID TEST(AMF0Test, ApiSize)
     }
 }
 
-VOID TEST(AMF0Test, ApiAnyElem) 
+/**
+* about the AMF0 any.
+*/
+VOID TEST(ProtocolAMF0Test, ApiAnyElem) 
 {
     SrsAmf0Any* o = NULL;
     
@@ -510,7 +521,10 @@ VOID TEST(AMF0Test, ApiAnyElem)
     }
 }
 
-VOID TEST(AMF0Test, ApiAnyIO) 
+/**
+* about the stream to serialize/deserialize AMF0 instance.
+*/
+VOID TEST(ProtocolAMF0Test, ApiAnyIO) 
 {
     SrsStream s;
     SrsAmf0Any* o = NULL;
@@ -521,8 +535,8 @@ VOID TEST(AMF0Test, ApiAnyIO)
     
     // object eof
     if (true) {
-        s.reset();
-        s.current()[2] = 0x09;
+        s.skip(-1 * s.pos());
+        (s.data() + s.pos())[2] = 0x09;
         
         o = SrsAmf0Any::object_eof();
         SrsAutoFree(SrsAmf0Any, o);
@@ -531,12 +545,12 @@ VOID TEST(AMF0Test, ApiAnyIO)
         EXPECT_EQ(o->total_size(), s.pos());
         EXPECT_EQ(3, s.pos());
         
-        s.reset();
-        s.current()[0] = 0x01;
+        s.skip(-1 * s.pos());
+        (s.data() + s.pos())[0] = 0x01;
         EXPECT_NE(ERROR_SUCCESS, o->read(&s));
     }
     if (true) {
-        s.reset();
+        s.skip(-1 * s.pos());
         
         o = SrsAmf0Any::object_eof();
         SrsAutoFree(SrsAmf0Any, o);
@@ -551,7 +565,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
     
     // string
     if (true) {
-        s.reset();
+        s.skip(-1 * s.pos());
         
         o = SrsAmf0Any::str("winlin");
         SrsAutoFree(SrsAmf0Any, o);
@@ -559,14 +573,14 @@ VOID TEST(AMF0Test, ApiAnyIO)
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(o->total_size(), s.pos());
         
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(2, s.read_1bytes());
         EXPECT_EQ(6, s.read_2bytes());
-        EXPECT_EQ('w', s.current()[0]);
-        EXPECT_EQ('n', s.current()[5]);
+        EXPECT_EQ('w', (s.data() + s.pos())[0]);
+        EXPECT_EQ('n', (s.data() + s.pos())[5]);
         
-        s.reset();
-        s.current()[3] = 'x';
+        s.skip(-1 * s.pos());
+        (s.data() + s.pos())[3] = 'x';
         EXPECT_EQ(ERROR_SUCCESS, o->read(&s));
         EXPECT_EQ(o->total_size(), s.pos());
         EXPECT_STREQ("xinlin", o->to_str().c_str());
@@ -574,7 +588,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
     
     // number
     if (true) {
-        s.reset();
+        s.skip(-1 * s.pos());
         
         o = SrsAmf0Any::number(10);
         SrsAutoFree(SrsAmf0Any, o);
@@ -582,10 +596,10 @@ VOID TEST(AMF0Test, ApiAnyIO)
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(o->total_size(), s.pos());
 
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(0, s.read_1bytes());
         
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(ERROR_SUCCESS, o->read(&s));
         EXPECT_EQ(o->total_size(), s.pos());
         EXPECT_DOUBLE_EQ(10, o->to_number());
@@ -593,7 +607,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
     
     // boolean
     if (true) {
-        s.reset();
+        s.skip(-1 * s.pos());
         
         o = SrsAmf0Any::boolean(true);
         SrsAutoFree(SrsAmf0Any, o);
@@ -601,16 +615,16 @@ VOID TEST(AMF0Test, ApiAnyIO)
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(o->total_size(), s.pos());
 
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(1, s.read_1bytes());
         
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(ERROR_SUCCESS, o->read(&s));
         EXPECT_EQ(o->total_size(), s.pos());
         EXPECT_TRUE(o->to_boolean());
     }
     if (true) {
-        s.reset();
+        s.skip(-1 * s.pos());
         
         o = SrsAmf0Any::boolean(false);
         SrsAutoFree(SrsAmf0Any, o);
@@ -618,10 +632,10 @@ VOID TEST(AMF0Test, ApiAnyIO)
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(o->total_size(), s.pos());
 
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(1, s.read_1bytes());
         
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(ERROR_SUCCESS, o->read(&s));
         EXPECT_EQ(o->total_size(), s.pos());
         EXPECT_FALSE(o->to_boolean());
@@ -629,7 +643,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
     
     // null
     if (true) {
-        s.reset();
+        s.skip(-1 * s.pos());
         
         o = SrsAmf0Any::null();
         SrsAutoFree(SrsAmf0Any, o);
@@ -637,10 +651,10 @@ VOID TEST(AMF0Test, ApiAnyIO)
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(o->total_size(), s.pos());
 
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(5, s.read_1bytes());
         
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(ERROR_SUCCESS, o->read(&s));
         EXPECT_EQ(o->total_size(), s.pos());
         EXPECT_TRUE(o->is_null());
@@ -648,7 +662,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
     
     // undefined
     if (true) {
-        s.reset();
+        s.skip(-1 * s.pos());
         
         o = SrsAmf0Any::undefined();
         SrsAutoFree(SrsAmf0Any, o);
@@ -656,10 +670,10 @@ VOID TEST(AMF0Test, ApiAnyIO)
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(o->total_size(), s.pos());
 
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(6, s.read_1bytes());
         
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(ERROR_SUCCESS, o->read(&s));
         EXPECT_EQ(o->total_size(), s.pos());
         EXPECT_TRUE(o->is_undefined());
@@ -667,7 +681,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
 
     // any: string
     if (true) {
-        s.reset();
+        s.skip(-1 * s.pos());
         
         o = SrsAmf0Any::str("winlin");
         SrsAutoFree(SrsAmf0Any, o);
@@ -675,7 +689,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(o->total_size(), s.pos());
 
-        s.reset();
+        s.skip(-1 * s.pos());
         
         SrsAmf0Any* po = NULL;
         EXPECT_EQ(ERROR_SUCCESS, srs_amf0_read_any(&s, &po));
@@ -687,7 +701,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
 
     // any: number
     if (true) {
-        s.reset();
+        s.skip(-1 * s.pos());
         
         o = SrsAmf0Any::number(10);
         SrsAutoFree(SrsAmf0Any, o);
@@ -695,7 +709,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(o->total_size(), s.pos());
 
-        s.reset();
+        s.skip(-1 * s.pos());
         
         SrsAmf0Any* po = NULL;
         EXPECT_EQ(ERROR_SUCCESS, srs_amf0_read_any(&s, &po));
@@ -707,7 +721,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
 
     // any: boolean
     if (true) {
-        s.reset();
+        s.skip(-1 * s.pos());
         
         o = SrsAmf0Any::boolean(true);
         SrsAutoFree(SrsAmf0Any, o);
@@ -715,7 +729,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(o->total_size(), s.pos());
 
-        s.reset();
+        s.skip(-1 * s.pos());
         
         SrsAmf0Any* po = NULL;
         EXPECT_EQ(ERROR_SUCCESS, srs_amf0_read_any(&s, &po));
@@ -727,7 +741,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
 
     // any: null
     if (true) {
-        s.reset();
+        s.skip(-1 * s.pos());
         
         o = SrsAmf0Any::null();
         SrsAutoFree(SrsAmf0Any, o);
@@ -735,7 +749,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(o->total_size(), s.pos());
 
-        s.reset();
+        s.skip(-1 * s.pos());
         
         SrsAmf0Any* po = NULL;
         EXPECT_EQ(ERROR_SUCCESS, srs_amf0_read_any(&s, &po));
@@ -746,7 +760,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
 
     // any: undefined
     if (true) {
-        s.reset();
+        s.skip(-1 * s.pos());
         
         o = SrsAmf0Any::undefined();
         SrsAutoFree(SrsAmf0Any, o);
@@ -754,7 +768,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(o->total_size(), s.pos());
 
-        s.reset();
+        s.skip(-1 * s.pos());
         
         SrsAmf0Any* po = NULL;
         EXPECT_EQ(ERROR_SUCCESS, srs_amf0_read_any(&s, &po));
@@ -765,7 +779,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
     
     // mixed any
     if (true) {
-        s.reset();
+        s.skip(-1 * s.pos());
         
         o = SrsAmf0Any::str("winlin");
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
@@ -787,7 +801,7 @@ VOID TEST(AMF0Test, ApiAnyIO)
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         srs_freep(o);
         
-        s.reset();
+        s.skip(-1 * s.pos());
         SrsAmf0Any* po = NULL;
         
         EXPECT_EQ(ERROR_SUCCESS, srs_amf0_read_any(&s, &po));
@@ -820,7 +834,10 @@ VOID TEST(AMF0Test, ApiAnyIO)
     }
 }
 
-VOID TEST(AMF0Test, ApiAnyAssert) 
+/**
+* to get the type identity
+*/
+VOID TEST(ProtocolAMF0Test, ApiAnyTypeAssert) 
 {
     SrsStream s;
     SrsAmf0Any* o = NULL;
@@ -831,8 +848,8 @@ VOID TEST(AMF0Test, ApiAnyAssert)
     
     // read any
     if (true) {
-        s.reset();
-        s.current()[0] = 0x12;
+        s.skip(-1 * s.pos());
+        (s.data() + s.pos())[0] = 0x12;
         EXPECT_NE(ERROR_SUCCESS, srs_amf0_read_any(&s, &o));
         EXPECT_TRUE(NULL == o);
         srs_freep(o);
@@ -884,7 +901,7 @@ VOID TEST(AMF0Test, ApiAnyAssert)
     if (true) {
         o = SrsAmf0Any::object();
         SrsAutoFree(SrsAmf0Any, o);
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(1+3, s.pos());
     }
@@ -893,7 +910,7 @@ VOID TEST(AMF0Test, ApiAnyAssert)
     if (true) {
         o = SrsAmf0Any::ecma_array();
         SrsAutoFree(SrsAmf0Any, o);
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(1+4+3, s.pos());
     }
@@ -902,13 +919,16 @@ VOID TEST(AMF0Test, ApiAnyAssert)
     if (true) {
         o = SrsAmf0Any::strict_array();
         SrsAutoFree(SrsAmf0Any, o);
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(1+4, s.pos());
     }
 }
 
-VOID TEST(AMF0Test, ApiObjectProps) 
+/**
+* object property get/set
+*/
+VOID TEST(ProtocolAMF0Test, ApiObjectProps) 
 {
     SrsAmf0Object* o = NULL;
     
@@ -986,7 +1006,10 @@ VOID TEST(AMF0Test, ApiObjectProps)
     }
 }
 
-VOID TEST(AMF0Test, ApiEcmaArrayProps) 
+/**
+* ecma array properties.
+*/
+VOID TEST(ProtocolAMF0Test, ApiEcmaArrayProps) 
 {
     SrsAmf0EcmaArray* o = NULL;
     
@@ -1064,7 +1087,10 @@ VOID TEST(AMF0Test, ApiEcmaArrayProps)
     }
 }
 
-VOID TEST(AMF0Test, ApiStrictArray)
+/**
+* strict array.
+*/
+VOID TEST(ProtocolAMF0Test, ApiStrictArray)
 {
     SrsStream s;
     
@@ -1111,11 +1137,11 @@ VOID TEST(AMF0Test, ApiStrictArray)
         o = SrsAmf0Any::strict_array();
         SrsAutoFree(SrsAmf0StrictArray, o);
         
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(5, s.pos());
         
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(0x0a, s.read_1bytes());
         EXPECT_EQ(0x00, s.read_4bytes());
     }
@@ -1126,8 +1152,124 @@ VOID TEST(AMF0Test, ApiStrictArray)
         
         o->append(SrsAmf0Any::number(0));
         
-        s.reset();
+        s.skip(-1 * s.pos());
         EXPECT_EQ(ERROR_SUCCESS, o->write(&s));
         EXPECT_EQ(5 + SrsAmf0Size::number(), s.pos());
     }
 }
+
+/**
+* object has object property, 
+*/
+VOID TEST(ProtocolAMF0Test, ObjectObjectObject)
+{
+    SrsAmf0Any* obj = SrsAmf0Any::object();
+    SrsAutoFree(SrsAmf0Any, obj);
+    EXPECT_EQ(0, obj->to_object()->count());
+    
+    SrsAmf0Any* child1 = SrsAmf0Any::object();
+    obj->to_object()->set("child1", child1);
+    EXPECT_EQ(1, obj->to_object()->count());
+    EXPECT_EQ(0, child1->to_object()->count());
+    
+    SrsAmf0Any* child2 = SrsAmf0Any::object();
+    child1->to_object()->set("child2", child2);
+    EXPECT_EQ(1, obj->to_object()->count());
+    EXPECT_EQ(1, child1->to_object()->count());
+    EXPECT_EQ(0, child2->to_object()->count());
+    
+    SrsAmf0Any* child3 = SrsAmf0Any::object();
+    child2->to_object()->set("child3", child3);
+    EXPECT_EQ(1, obj->to_object()->count());
+    EXPECT_EQ(1, child1->to_object()->count());
+    EXPECT_EQ(1, child2->to_object()->count());
+    EXPECT_EQ(0, child3->to_object()->count());
+}
+
+/**
+* ecma array has ecma array property, 
+*/
+VOID TEST(ProtocolAMF0Test, EcmaEcmaEcma)
+{
+    SrsAmf0Any* arr = SrsAmf0Any::ecma_array();
+    SrsAutoFree(SrsAmf0Any, arr);
+    EXPECT_EQ(0, arr->to_ecma_array()->count());
+    
+    SrsAmf0Any* arr1 = SrsAmf0Any::ecma_array();
+    arr->to_ecma_array()->set("child1", arr1);
+    EXPECT_EQ(1, arr->to_ecma_array()->count());
+    EXPECT_EQ(0, arr1->to_ecma_array()->count());
+    
+    SrsAmf0Any* arr2 = SrsAmf0Any::ecma_array();
+    arr1->to_ecma_array()->set("child2", arr2);
+    EXPECT_EQ(1, arr->to_ecma_array()->count());
+    EXPECT_EQ(1, arr1->to_ecma_array()->count());
+    EXPECT_EQ(0, arr2->to_ecma_array()->count());
+    
+    SrsAmf0Any* arr3 = SrsAmf0Any::ecma_array();
+    arr2->to_ecma_array()->set("child3", arr3);
+    EXPECT_EQ(1, arr->to_ecma_array()->count());
+    EXPECT_EQ(1, arr1->to_ecma_array()->count());
+    EXPECT_EQ(1, arr2->to_ecma_array()->count());
+    EXPECT_EQ(0, arr3->to_ecma_array()->count());
+}
+
+/**
+* strict array contains strict array
+*/
+VOID TEST(ProtocolAMF0Test, StrictStrictStrict)
+{
+    SrsAmf0Any* arr = SrsAmf0Any::strict_array();
+    SrsAutoFree(SrsAmf0Any, arr);
+    EXPECT_EQ(0, arr->to_strict_array()->count());
+    
+    SrsAmf0Any* arr1 = SrsAmf0Any::strict_array();
+    arr->to_strict_array()->append(arr1);
+    EXPECT_EQ(1, arr->to_strict_array()->count());
+    EXPECT_EQ(0, arr1->to_strict_array()->count());
+    
+    SrsAmf0Any* arr2 = SrsAmf0Any::strict_array();
+    arr1->to_strict_array()->append(arr2);
+    EXPECT_EQ(1, arr->to_strict_array()->count());
+    EXPECT_EQ(1, arr1->to_strict_array()->count());
+    EXPECT_EQ(0, arr2->to_strict_array()->count());
+    
+    SrsAmf0Any* arr3 = SrsAmf0Any::strict_array();
+    arr2->to_strict_array()->append(arr3);
+    EXPECT_EQ(1, arr->to_strict_array()->count());
+    EXPECT_EQ(1, arr1->to_strict_array()->count());
+    EXPECT_EQ(1, arr2->to_strict_array()->count());
+    EXPECT_EQ(0, arr3->to_strict_array()->count());
+}
+
+/**
+* object has ecma array property,
+* where ecma array contains strict array.
+*/
+VOID TEST(ProtocolAMF0Test, ObjectEcmaStrict)
+{
+    SrsAmf0Any* obj = SrsAmf0Any::object();
+    SrsAutoFree(SrsAmf0Any, obj);
+    EXPECT_EQ(0, obj->to_object()->count());
+    
+    SrsAmf0Any* arr1 = SrsAmf0Any::ecma_array();
+    obj->to_object()->set("child1", arr1);
+    EXPECT_EQ(1, obj->to_object()->count());
+    EXPECT_EQ(0, arr1->to_ecma_array()->count());
+    
+    SrsAmf0Any* arr2 = SrsAmf0Any::strict_array();
+    arr1->to_ecma_array()->set("child2", arr2);
+    EXPECT_EQ(1, obj->to_object()->count());
+    EXPECT_EQ(1, arr1->to_ecma_array()->count());
+    EXPECT_EQ(0, arr2->to_strict_array()->count());
+    
+    SrsAmf0Any* arr3 = SrsAmf0Any::ecma_array();
+    arr2->to_strict_array()->append(arr3);
+    EXPECT_EQ(1, obj->to_object()->count());
+    EXPECT_EQ(1, arr1->to_ecma_array()->count());
+    EXPECT_EQ(1, arr2->to_strict_array()->count());
+    EXPECT_EQ(0, arr3->to_ecma_array()->count());
+}
+
+#endif
+

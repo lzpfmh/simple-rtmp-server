@@ -21,49 +21,44 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#ifndef SRS_UTEST_HANDSHAKE_HPP
-#define SRS_UTEST_HANDSHAKE_HPP
+#ifndef SRS_RTMP_PROTOCOL_MSG_ARRAY_HPP
+#define SRS_RTMP_PROTOCOL_MSG_ARRAY_HPP
 
 /*
-#include <srs_utest_handshake.hpp>
+#include <srs_protocol_msg_array.hpp>
 */
-#include <srs_utest.hpp>
 
-#include <srs_protocol_rtmp.hpp>
-#include <srs_protocol_handshake.hpp>
+#include <srs_core.hpp>
 
-#ifdef SRS_AUTO_SSL
-using namespace srs;
-#endif
+class SrsSharedPtrMessage;
 
-#include <srs_protocol_io.hpp>
-
-class MockEmptyIO : public ISrsProtocolReaderWriter
+/**
+* the class to auto free the shared ptr message array.
+* when need to get some messages, for instance, from Consumer queue,
+* create a message array, whose msgs can used to accept the msgs,
+* then send each message and set to NULL.
+* @remark: when error, the message array will free the msg not sent out.
+*/
+class SrsSharedPtrMessageArray
 {
 public:
-    MockEmptyIO();
-    virtual ~MockEmptyIO();
-// for protocol
+    /**
+    * when user already send the msg in msgs, please set to NULL,
+    * for instance, msg= msgs.msgs[i], msgs.msgs[i]=NULL, send(msg),
+    * where send(msg) will always send and free it.
+    */
+    SrsSharedPtrMessage** msgs;
+    int size;
 public:
-    virtual bool is_never_timeout(int64_t timeout_us);
-// for handshake.
-public:
-    virtual int read_fully(void* buf, size_t size, ssize_t* nread);
-    virtual int write(void* buf, size_t size, ssize_t* nwrite);
-// for protocol
-public:
-    virtual void set_recv_timeout(int64_t timeout_us);
-    virtual int64_t get_recv_timeout();
-    virtual int64_t get_recv_bytes();
-// for protocol
-public:
-    virtual void set_send_timeout(int64_t timeout_us);
-    virtual int64_t get_send_timeout();
-    virtual int64_t get_send_bytes();
-    virtual int writev(const iovec *iov, int iov_size, ssize_t* nwrite);
-// for protocol/amf0/msg-codec
-public:
-    virtual int read(void* buf, size_t size, ssize_t* nread);
+    /**
+    * create msg array, initialize array to NULL ptrs.
+    */
+    SrsSharedPtrMessageArray(int _size);
+    /**
+    * free the msgs not sent out(not NULL).
+    */
+    virtual ~SrsSharedPtrMessageArray();
 };
 
 #endif
+

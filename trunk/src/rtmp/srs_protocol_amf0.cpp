@@ -25,11 +25,14 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <utility>
 #include <vector>
+#include <sstream>
 using namespace std;
 
 #include <srs_kernel_log.hpp>
 #include <srs_kernel_error.hpp>
 #include <srs_kernel_stream.hpp>
+
+using namespace _srs_internal;
 
 // AMF0 marker
 #define RTMP_AMF0_Number                     0x00
@@ -56,164 +59,6 @@ using namespace std;
 
 // User defined
 #define RTMP_AMF0_Invalid                     0x3F
-
-/**
-* read amf0 string from stream.
-* 2.4 String Type
-* string-type = string-marker UTF-8
-* @return default value is empty string.
-* @remark: use SrsAmf0Any::str() to create it.
-*/
-class __SrsAmf0String : public SrsAmf0Any
-{
-public:
-    std::string value;
-
-    __SrsAmf0String(const char* _value);
-    virtual ~__SrsAmf0String();
-    
-    virtual int total_size();
-    virtual int read(SrsStream* stream);
-    virtual int write(SrsStream* stream);
-    virtual SrsAmf0Any* copy();
-};
-
-/**
-* read amf0 boolean from stream.
-* 2.4 String Type
-* boolean-type = boolean-marker U8
-*         0 is false, <> 0 is true
-* @return default value is false.
-*/
-class __SrsAmf0Boolean : public SrsAmf0Any
-{
-public:
-    bool value;
-
-    __SrsAmf0Boolean(bool _value);
-    virtual ~__SrsAmf0Boolean();
-    
-    virtual int total_size();
-    virtual int read(SrsStream* stream);
-    virtual int write(SrsStream* stream);
-    virtual SrsAmf0Any* copy();
-};
-
-/**
-* read amf0 number from stream.
-* 2.2 Number Type
-* number-type = number-marker DOUBLE
-* @return default value is 0.
-*/
-class __SrsAmf0Number : public SrsAmf0Any
-{
-public:
-    double value;
-
-    __SrsAmf0Number(double _value);
-    virtual ~__SrsAmf0Number();
-    
-    virtual int total_size();
-    virtual int read(SrsStream* stream);
-    virtual int write(SrsStream* stream);
-    virtual SrsAmf0Any* copy();
-};
-
-/**
-* read amf0 null from stream.
-* 2.7 null Type
-* null-type = null-marker
-*/
-class __SrsAmf0Null : public SrsAmf0Any
-{
-public:
-    __SrsAmf0Null();
-    virtual ~__SrsAmf0Null();
-    
-    virtual int total_size();
-    virtual int read(SrsStream* stream);
-    virtual int write(SrsStream* stream);
-    virtual SrsAmf0Any* copy();
-};
-
-/**
-* read amf0 undefined from stream.
-* 2.8 undefined Type
-* undefined-type = undefined-marker
-*/
-class __SrsAmf0Undefined : public SrsAmf0Any
-{
-public:
-    __SrsAmf0Undefined();
-    virtual ~__SrsAmf0Undefined();
-    
-    virtual int total_size();
-    virtual int read(SrsStream* stream);
-    virtual int write(SrsStream* stream);
-    virtual SrsAmf0Any* copy();
-};
-
-/**
-* to ensure in inserted order.
-* for the FMLE will crash when AMF0Object is not ordered by inserted,
-* if ordered in map, the string compare order, the FMLE will creash when
-* get the response of connect app.
-*/
-class __SrsUnSortedHashtable
-{
-private:
-    typedef std::pair<std::string, SrsAmf0Any*> SrsAmf0ObjectPropertyType;
-    std::vector<SrsAmf0ObjectPropertyType> properties;
-public:
-    __SrsUnSortedHashtable();
-    virtual ~__SrsUnSortedHashtable();
-    
-    virtual int count();
-    virtual void clear();
-    virtual std::string key_at(int index);
-    virtual const char* key_raw_at(int index);
-    virtual SrsAmf0Any* value_at(int index);
-    virtual void set(std::string key, SrsAmf0Any* value);
-    
-    virtual SrsAmf0Any* get_property(std::string name);
-    virtual SrsAmf0Any* ensure_property_string(std::string name);
-    virtual SrsAmf0Any* ensure_property_number(std::string name);
-
-    virtual void copy(__SrsUnSortedHashtable* src);
-};
-
-/**
-* 2.11 Object End Type
-* object-end-type = UTF-8-empty object-end-marker
-* 0x00 0x00 0x09
-*/
-class __SrsAmf0ObjectEOF : public SrsAmf0Any
-{
-public:
-    int16_t utf8_empty;
-
-    __SrsAmf0ObjectEOF();
-    virtual ~__SrsAmf0ObjectEOF();
-    
-    virtual int total_size();
-    virtual int read(SrsStream* stream);
-    virtual int write(SrsStream* stream);
-    virtual SrsAmf0Any* copy();
-};
-
-/**
-* read amf0 utf8 string from stream.
-* 1.3.1 Strings and UTF-8
-* UTF-8 = U16 *(UTF8-char)
-* UTF8-char = UTF8-1 | UTF8-2 | UTF8-3 | UTF8-4
-* UTF8-1 = %x00-7F
-* @remark only support UTF8-1 char.
-*/
-extern int srs_amf0_read_utf8(SrsStream* stream, std::string& value);
-extern int srs_amf0_write_utf8(SrsStream* stream, std::string value);
-
-bool srs_amf0_is_object_eof(SrsStream* stream);
-int srs_amf0_write_any(SrsStream* stream, SrsAmf0Any* value);
 
 SrsAmf0Any::SrsAmf0Any()
 {
@@ -271,28 +116,28 @@ bool SrsAmf0Any::is_complex_object()
 
 string SrsAmf0Any::to_str()
 {
-    __SrsAmf0String* p = dynamic_cast<__SrsAmf0String*>(this);
+    SrsAmf0String* p = dynamic_cast<SrsAmf0String*>(this);
     srs_assert(p != NULL);
     return p->value;
 }
 
 const char* SrsAmf0Any::to_str_raw()
 {
-    __SrsAmf0String* p = dynamic_cast<__SrsAmf0String*>(this);
+    SrsAmf0String* p = dynamic_cast<SrsAmf0String*>(this);
     srs_assert(p != NULL);
     return p->value.data();
 }
 
 bool SrsAmf0Any::to_boolean()
 {
-    __SrsAmf0Boolean* p = dynamic_cast<__SrsAmf0Boolean*>(this);
+    SrsAmf0Boolean* p = dynamic_cast<SrsAmf0Boolean*>(this);
     srs_assert(p != NULL);
     return p->value;
 }
 
 double SrsAmf0Any::to_number()
 {
-    __SrsAmf0Number* p = dynamic_cast<__SrsAmf0Number*>(this);
+    SrsAmf0Number* p = dynamic_cast<SrsAmf0Number*>(this);
     srs_assert(p != NULL);
     return p->value;
 }
@@ -320,7 +165,7 @@ SrsAmf0StrictArray* SrsAmf0Any::to_strict_array()
 
 void SrsAmf0Any::set_number(double value)
 {
-    __SrsAmf0Number* p = dynamic_cast<__SrsAmf0Number*>(this);
+    SrsAmf0Number* p = dynamic_cast<SrsAmf0Number*>(this);
     srs_assert(p != NULL);
     p->value = value;
 }
@@ -330,29 +175,113 @@ bool SrsAmf0Any::is_object_eof()
     return marker == RTMP_AMF0_ObjectEnd;
 }
 
+void __srs_fill_level_spaces(stringstream& ss, int level)
+{
+    for (int i = 0; i < level; i++) {
+        ss << "    ";
+    }
+}
+void __srs_amf0_do_print(SrsAmf0Any* any, stringstream& ss, int level)
+{
+    if (any->is_boolean()) {
+        ss << "Boolean " << (any->to_boolean()? "true":"false") << endl;
+    } else if (any->is_number()) {
+        ss << "Number " << std::fixed << any->to_number() << endl;
+    } else if (any->is_string()) {
+        ss << "String " << any->to_str() << endl;
+    } else if (any->is_null()) {
+        ss << "Null" << endl;
+    } else if (any->is_ecma_array()) {
+        SrsAmf0EcmaArray* obj = any->to_ecma_array();
+        ss << "EcmaArray " << "(" << obj->count() << " items)" << endl;
+        for (int i = 0; i < obj->count(); i++) {
+            __srs_fill_level_spaces(ss, level + 1);
+            ss << "Elem '" << obj->key_at(i) << "' ";
+            if (obj->value_at(i)->is_complex_object()) {
+                __srs_amf0_do_print(obj->value_at(i), ss, level + 1);
+            } else {
+                __srs_amf0_do_print(obj->value_at(i), ss, 0);
+            }
+        }
+    } else if (any->is_strict_array()) {
+        SrsAmf0StrictArray* obj = any->to_strict_array();
+        ss << "StrictArray " << "(" << obj->count() << " items)" << endl;
+        for (int i = 0; i < obj->count(); i++) {
+            __srs_fill_level_spaces(ss, level + 1);
+            ss << "Elem ";
+            if (obj->at(i)->is_complex_object()) {
+                __srs_amf0_do_print(obj->at(i), ss, level + 1);
+            } else {
+                __srs_amf0_do_print(obj->at(i), ss, 0);
+            }
+        }
+    } else if (any->is_object()) {
+        SrsAmf0Object* obj = any->to_object();
+        ss << "Object " << "(" << obj->count() << " items)" << endl;
+        for (int i = 0; i < obj->count(); i++) {
+            __srs_fill_level_spaces(ss, level + 1);
+            ss << "Property '" << obj->key_at(i) << "' ";
+            if (obj->value_at(i)->is_complex_object()) {
+                __srs_amf0_do_print(obj->value_at(i), ss, level + 1);
+            } else {
+                __srs_amf0_do_print(obj->value_at(i), ss, 0);
+            }
+        }
+    } else {
+        ss << "Unknown" << endl;
+    }
+}
+
+char* SrsAmf0Any::human_print(char** pdata, int* psize)
+{
+    stringstream ss;
+    
+    ss.precision(1);
+    
+    __srs_amf0_do_print(this, ss, 0);
+    
+    string str = ss.str();
+    if (str.empty()) {
+        return NULL;
+    }
+    
+    char* data = new char[str.length() + 1];
+    memcpy(data, str.data(), str.length());
+    data[str.length()] = 0;
+    
+    if (pdata) {
+        *pdata = data;
+    }
+    if (psize) {
+        *psize = str.length();
+    }
+    
+    return data;
+}
+
 SrsAmf0Any* SrsAmf0Any::str(const char* value)
 {
-    return new __SrsAmf0String(value);
+    return new SrsAmf0String(value);
 }
 
 SrsAmf0Any* SrsAmf0Any::boolean(bool value)
 {
-    return new __SrsAmf0Boolean(value);
+    return new SrsAmf0Boolean(value);
 }
 
 SrsAmf0Any* SrsAmf0Any::number(double value)
 {
-    return new __SrsAmf0Number(value);
+    return new SrsAmf0Number(value);
 }
 
 SrsAmf0Any* SrsAmf0Any::null()
 {
-    return new __SrsAmf0Null();
+    return new SrsAmf0Null();
 }
 
 SrsAmf0Any* SrsAmf0Any::undefined()
 {
-    return new __SrsAmf0Undefined();
+    return new SrsAmf0Undefined();
 }
 
 SrsAmf0Object* SrsAmf0Any::object()
@@ -362,7 +291,7 @@ SrsAmf0Object* SrsAmf0Any::object()
 
 SrsAmf0Any* SrsAmf0Any::object_eof()
 {
-    return new __SrsAmf0ObjectEOF();
+    return new SrsAmf0ObjectEOF();
 }
 
 SrsAmf0EcmaArray* SrsAmf0Any::ecma_array()
@@ -381,7 +310,7 @@ int SrsAmf0Any::discovery(SrsStream* stream, SrsAmf0Any** ppvalue)
     
     // detect the object-eof specially
     if (srs_amf0_is_object_eof(stream)) {
-        *ppvalue = new __SrsAmf0ObjectEOF();
+        *ppvalue = new SrsAmf0ObjectEOF();
         return ret;
     }
     
@@ -438,25 +367,23 @@ int SrsAmf0Any::discovery(SrsStream* stream, SrsAmf0Any** ppvalue)
             return ret;
         }
     }
-    
-    return ret;
 }
 
-__SrsUnSortedHashtable::__SrsUnSortedHashtable()
+SrsUnSortedHashtable::SrsUnSortedHashtable()
 {
 }
 
-__SrsUnSortedHashtable::~__SrsUnSortedHashtable()
+SrsUnSortedHashtable::~SrsUnSortedHashtable()
 {
     clear();
 }
 
-int __SrsUnSortedHashtable::count()
+int SrsUnSortedHashtable::count()
 {
     return (int)properties.size();
 }
 
-void __SrsUnSortedHashtable::clear()
+void SrsUnSortedHashtable::clear()
 {
     std::vector<SrsAmf0ObjectPropertyType>::iterator it;
     for (it = properties.begin(); it != properties.end(); ++it) {
@@ -467,28 +394,28 @@ void __SrsUnSortedHashtable::clear()
     properties.clear();
 }
 
-string __SrsUnSortedHashtable::key_at(int index)
+string SrsUnSortedHashtable::key_at(int index)
 {
     srs_assert(index < count());
     SrsAmf0ObjectPropertyType& elem = properties[index];
     return elem.first;
 }
 
-const char* __SrsUnSortedHashtable::key_raw_at(int index)
+const char* SrsUnSortedHashtable::key_raw_at(int index)
 {
     srs_assert(index < count());
     SrsAmf0ObjectPropertyType& elem = properties[index];
     return elem.first.data();
 }
 
-SrsAmf0Any* __SrsUnSortedHashtable::value_at(int index)
+SrsAmf0Any* SrsUnSortedHashtable::value_at(int index)
 {
     srs_assert(index < count());
     SrsAmf0ObjectPropertyType& elem = properties[index];
     return elem.second;
 }
 
-void __SrsUnSortedHashtable::set(string key, SrsAmf0Any* value)
+void SrsUnSortedHashtable::set(string key, SrsAmf0Any* value)
 {
     if (!value) {
         srs_warn("add a NULL propertity %s", key.c_str());
@@ -512,7 +439,7 @@ void __SrsUnSortedHashtable::set(string key, SrsAmf0Any* value)
     properties.push_back(std::make_pair(key, value));
 }
 
-SrsAmf0Any* __SrsUnSortedHashtable::get_property(string name)
+SrsAmf0Any* SrsUnSortedHashtable::get_property(string name)
 {
     std::vector<SrsAmf0ObjectPropertyType>::iterator it;
     
@@ -528,7 +455,7 @@ SrsAmf0Any* __SrsUnSortedHashtable::get_property(string name)
     return NULL;
 }
 
-SrsAmf0Any* __SrsUnSortedHashtable::ensure_property_string(string name)
+SrsAmf0Any* SrsUnSortedHashtable::ensure_property_string(string name)
 {
     SrsAmf0Any* prop = get_property(name);
     
@@ -543,7 +470,7 @@ SrsAmf0Any* __SrsUnSortedHashtable::ensure_property_string(string name)
     return prop;
 }
 
-SrsAmf0Any* __SrsUnSortedHashtable::ensure_property_number(string name)
+SrsAmf0Any* SrsUnSortedHashtable::ensure_property_number(string name)
 {
     SrsAmf0Any* prop = get_property(name);
     
@@ -558,7 +485,7 @@ SrsAmf0Any* __SrsUnSortedHashtable::ensure_property_number(string name)
     return prop;
 }
 
-void __SrsUnSortedHashtable::copy(__SrsUnSortedHashtable* src)
+void SrsUnSortedHashtable::copy(SrsUnSortedHashtable* src)
 {
     std::vector<SrsAmf0ObjectPropertyType>::iterator it;
     for (it = src->properties.begin(); it != src->properties.end(); ++it) {
@@ -569,22 +496,21 @@ void __SrsUnSortedHashtable::copy(__SrsUnSortedHashtable* src)
     }
 }
 
-__SrsAmf0ObjectEOF::__SrsAmf0ObjectEOF()
+SrsAmf0ObjectEOF::SrsAmf0ObjectEOF()
 {
     marker = RTMP_AMF0_ObjectEnd;
-    utf8_empty = 0x00;
 }
 
-__SrsAmf0ObjectEOF::~__SrsAmf0ObjectEOF()
+SrsAmf0ObjectEOF::~SrsAmf0ObjectEOF()
 {
 }
 
-int __SrsAmf0ObjectEOF::total_size()
+int SrsAmf0ObjectEOF::total_size()
 {
     return SrsAmf0Size::object_eof();
 }
 
-int __SrsAmf0ObjectEOF::read(SrsStream* stream)
+int SrsAmf0ObjectEOF::read(SrsStream* stream)
 {
     int ret = ERROR_SUCCESS;
     
@@ -622,7 +548,7 @@ int __SrsAmf0ObjectEOF::read(SrsStream* stream)
     
     return ret;
 }
-int __SrsAmf0ObjectEOF::write(SrsStream* stream)
+int SrsAmf0ObjectEOF::write(SrsStream* stream)
 {
     int ret = ERROR_SUCCESS;
     
@@ -649,15 +575,15 @@ int __SrsAmf0ObjectEOF::write(SrsStream* stream)
     return ret;
 }
 
-SrsAmf0Any* __SrsAmf0ObjectEOF::copy()
+SrsAmf0Any* SrsAmf0ObjectEOF::copy()
 {
-    return new __SrsAmf0ObjectEOF();
+    return new SrsAmf0ObjectEOF();
 }
 
 SrsAmf0Object::SrsAmf0Object()
 {
-    properties = new __SrsUnSortedHashtable();
-    eof = new __SrsAmf0ObjectEOF();
+    properties = new SrsUnSortedHashtable();
+    eof = new SrsAmf0ObjectEOF();
     marker = RTMP_AMF0_Object;
 }
 
@@ -708,7 +634,7 @@ int SrsAmf0Object::read(SrsStream* stream)
     while (!stream->empty()) {
         // detect whether is eof.
         if (srs_amf0_is_object_eof(stream)) {
-            __SrsAmf0ObjectEOF pbj_eof;
+            SrsAmf0ObjectEOF pbj_eof;
             if ((ret = pbj_eof.read(stream)) != ERROR_SUCCESS) {
                 srs_error("amf0 object read eof failed. ret=%d", ret);
                 return ret;
@@ -719,7 +645,7 @@ int SrsAmf0Object::read(SrsStream* stream)
         
         // property-name: utf8 string
         std::string property_name;
-        if ((ret =srs_amf0_read_utf8(stream, property_name)) != ERROR_SUCCESS) {
+        if ((ret = srs_amf0_read_utf8(stream, property_name)) != ERROR_SUCCESS) {
             srs_error("amf0 object read property name failed. ret=%d", ret);
             return ret;
         }
@@ -836,8 +762,8 @@ SrsAmf0Any* SrsAmf0Object::ensure_property_number(string name)
 SrsAmf0EcmaArray::SrsAmf0EcmaArray()
 {
     _count = 0;
-    properties = new __SrsUnSortedHashtable();
-    eof = new __SrsAmf0ObjectEOF();
+    properties = new SrsUnSortedHashtable();
+    eof = new SrsAmf0ObjectEOF();
     marker = RTMP_AMF0_EcmaArray;
 }
 
@@ -900,7 +826,7 @@ int SrsAmf0EcmaArray::read(SrsStream* stream)
     while (!stream->empty()) {
         // detect whether is eof.
         if (srs_amf0_is_object_eof(stream)) {
-            __SrsAmf0ObjectEOF pbj_eof;
+            SrsAmf0ObjectEOF pbj_eof;
             if ((ret = pbj_eof.read(stream)) != ERROR_SUCCESS) {
                 srs_error("amf0 ecma_array read eof failed. ret=%d", ret);
                 return ret;
@@ -1142,7 +1068,7 @@ int SrsAmf0StrictArray::write(SrsStream* stream)
             return ret;
         }
         
-        srs_verbose("write amf0 property success. name=%s", name.c_str());
+        srs_verbose("write amf0 property success.");
     }
     
     srs_verbose("write strict_array object success.");
@@ -1257,7 +1183,7 @@ int SrsAmf0Size::any(SrsAmf0Any* o)
     return o->total_size();
 }
 
-__SrsAmf0String::__SrsAmf0String(const char* _value)
+SrsAmf0String::SrsAmf0String(const char* _value)
 {
     marker = RTMP_AMF0_String;
     if (_value) {
@@ -1265,150 +1191,150 @@ __SrsAmf0String::__SrsAmf0String(const char* _value)
     }
 }
 
-__SrsAmf0String::~__SrsAmf0String()
+SrsAmf0String::~SrsAmf0String()
 {
 }
 
-int __SrsAmf0String::total_size()
+int SrsAmf0String::total_size()
 {
     return SrsAmf0Size::str(value);
 }
 
-int __SrsAmf0String::read(SrsStream* stream)
+int SrsAmf0String::read(SrsStream* stream)
 {
     return srs_amf0_read_string(stream, value);
 }
 
-int __SrsAmf0String::write(SrsStream* stream)
+int SrsAmf0String::write(SrsStream* stream)
 {
     return srs_amf0_write_string(stream, value);
 }
 
-SrsAmf0Any* __SrsAmf0String::copy()
+SrsAmf0Any* SrsAmf0String::copy()
 {
-    __SrsAmf0String* copy = new __SrsAmf0String(value.c_str());
+    SrsAmf0String* copy = new SrsAmf0String(value.c_str());
     return copy;
 }
 
-__SrsAmf0Boolean::__SrsAmf0Boolean(bool _value)
+SrsAmf0Boolean::SrsAmf0Boolean(bool _value)
 {
     marker = RTMP_AMF0_Boolean;
     value = _value;
 }
 
-__SrsAmf0Boolean::~__SrsAmf0Boolean()
+SrsAmf0Boolean::~SrsAmf0Boolean()
 {
 }
 
-int __SrsAmf0Boolean::total_size()
+int SrsAmf0Boolean::total_size()
 {
     return SrsAmf0Size::boolean();
 }
 
-int __SrsAmf0Boolean::read(SrsStream* stream)
+int SrsAmf0Boolean::read(SrsStream* stream)
 {
     return srs_amf0_read_boolean(stream, value);
 }
 
-int __SrsAmf0Boolean::write(SrsStream* stream)
+int SrsAmf0Boolean::write(SrsStream* stream)
 {
     return srs_amf0_write_boolean(stream, value);
 }
 
-SrsAmf0Any* __SrsAmf0Boolean::copy()
+SrsAmf0Any* SrsAmf0Boolean::copy()
 {
-    __SrsAmf0Boolean* copy = new __SrsAmf0Boolean(value);
+    SrsAmf0Boolean* copy = new SrsAmf0Boolean(value);
     return copy;
 }
 
-__SrsAmf0Number::__SrsAmf0Number(double _value)
+SrsAmf0Number::SrsAmf0Number(double _value)
 {
     marker = RTMP_AMF0_Number;
     value = _value;
 }
 
-__SrsAmf0Number::~__SrsAmf0Number()
+SrsAmf0Number::~SrsAmf0Number()
 {
 }
 
-int __SrsAmf0Number::total_size()
+int SrsAmf0Number::total_size()
 {
     return SrsAmf0Size::number();
 }
 
-int __SrsAmf0Number::read(SrsStream* stream)
+int SrsAmf0Number::read(SrsStream* stream)
 {
     return srs_amf0_read_number(stream, value);
 }
 
-int __SrsAmf0Number::write(SrsStream* stream)
+int SrsAmf0Number::write(SrsStream* stream)
 {
     return srs_amf0_write_number(stream, value);
 }
 
-SrsAmf0Any* __SrsAmf0Number::copy()
+SrsAmf0Any* SrsAmf0Number::copy()
 {
-    __SrsAmf0Number* copy = new __SrsAmf0Number(value);
+    SrsAmf0Number* copy = new SrsAmf0Number(value);
     return copy;
 }
 
-__SrsAmf0Null::__SrsAmf0Null()
+SrsAmf0Null::SrsAmf0Null()
 {
     marker = RTMP_AMF0_Null;
 }
 
-__SrsAmf0Null::~__SrsAmf0Null()
+SrsAmf0Null::~SrsAmf0Null()
 {
 }
 
-int __SrsAmf0Null::total_size()
+int SrsAmf0Null::total_size()
 {
     return SrsAmf0Size::null();
 }
 
-int __SrsAmf0Null::read(SrsStream* stream)
+int SrsAmf0Null::read(SrsStream* stream)
 {
     return srs_amf0_read_null(stream);
 }
 
-int __SrsAmf0Null::write(SrsStream* stream)
+int SrsAmf0Null::write(SrsStream* stream)
 {
     return srs_amf0_write_null(stream);
 }
 
-SrsAmf0Any* __SrsAmf0Null::copy()
+SrsAmf0Any* SrsAmf0Null::copy()
 {
-    __SrsAmf0Null* copy = new __SrsAmf0Null();
+    SrsAmf0Null* copy = new SrsAmf0Null();
     return copy;
 }
 
-__SrsAmf0Undefined::__SrsAmf0Undefined()
+SrsAmf0Undefined::SrsAmf0Undefined()
 {
     marker = RTMP_AMF0_Undefined;
 }
 
-__SrsAmf0Undefined::~__SrsAmf0Undefined()
+SrsAmf0Undefined::~SrsAmf0Undefined()
 {
 }
 
-int __SrsAmf0Undefined::total_size()
+int SrsAmf0Undefined::total_size()
 {
     return SrsAmf0Size::undefined();
 }
 
-int __SrsAmf0Undefined::read(SrsStream* stream)
+int SrsAmf0Undefined::read(SrsStream* stream)
 {
     return srs_amf0_read_undefined(stream);
 }
 
-int __SrsAmf0Undefined::write(SrsStream* stream)
+int SrsAmf0Undefined::write(SrsStream* stream)
 {
     return srs_amf0_write_undefined(stream);
 }
 
-SrsAmf0Any* __SrsAmf0Undefined::copy()
+SrsAmf0Any* SrsAmf0Undefined::copy()
 {
-    __SrsAmf0Undefined* copy = new __SrsAmf0Undefined();
+    SrsAmf0Undefined* copy = new SrsAmf0Undefined();
     return copy;
 }
 
@@ -1428,88 +1354,6 @@ int srs_amf0_read_any(SrsStream* stream, SrsAmf0Any** ppvalue)
         srs_freep(*ppvalue);
         return ret;
     }
-    
-    return ret;
-}
-
-int srs_amf0_write_any(SrsStream* stream, SrsAmf0Any* value)
-{
-    srs_assert(value != NULL);
-    return value->write(stream);
-}
-
-int srs_amf0_read_utf8(SrsStream* stream, string& value)
-{
-    int ret = ERROR_SUCCESS;
-    
-    // len
-    if (!stream->require(2)) {
-        ret = ERROR_RTMP_AMF0_DECODE;
-        srs_error("amf0 read string length failed. ret=%d", ret);
-        return ret;
-    }
-    int16_t len = stream->read_2bytes();
-    srs_verbose("amf0 read string length success. len=%d", len);
-    
-    // empty string
-    if (len <= 0) {
-        srs_verbose("amf0 read empty string. ret=%d", ret);
-        return ret;
-    }
-    
-    // data
-    if (!stream->require(len)) {
-        ret = ERROR_RTMP_AMF0_DECODE;
-        srs_error("amf0 read string data failed. ret=%d", ret);
-        return ret;
-    }
-    std::string str = stream->read_string(len);
-    
-    // support utf8-1 only
-    // 1.3.1 Strings and UTF-8
-    // UTF8-1 = %x00-7F
-    // TODO: support other utf-8 strings
-    /*for (int i = 0; i < len; i++) {
-        char ch = *(str.data() + i);
-        if ((ch & 0x80) != 0) {
-            ret = ERROR_RTMP_AMF0_DECODE;
-            srs_error("ignored. only support utf8-1, 0x00-0x7F, actual is %#x. ret=%d", (int)ch, ret);
-            ret = ERROR_SUCCESS;
-        }
-    }*/
-    
-    value = str;
-    srs_verbose("amf0 read string data success. str=%s", str.c_str());
-    
-    return ret;
-}
-int srs_amf0_write_utf8(SrsStream* stream, string value)
-{
-    int ret = ERROR_SUCCESS;
-    
-    // len
-    if (!stream->require(2)) {
-        ret = ERROR_RTMP_AMF0_ENCODE;
-        srs_error("amf0 write string length failed. ret=%d", ret);
-        return ret;
-    }
-    stream->write_2bytes(value.length());
-    srs_verbose("amf0 write string length success. len=%d", (int)value.length());
-    
-    // empty string
-    if (value.length() <= 0) {
-        srs_verbose("amf0 write empty string. ret=%d", ret);
-        return ret;
-    }
-    
-    // data
-    if (!stream->require(value.length())) {
-        ret = ERROR_RTMP_AMF0_ENCODE;
-        srs_error("amf0 write string data failed. ret=%d", ret);
-        return ret;
-    }
-    stream->write_string(value);
-    srs_verbose("amf0 write string data success. str=%s", value.c_str());
     
     return ret;
 }
@@ -1581,11 +1425,7 @@ int srs_amf0_read_boolean(SrsStream* stream, bool& value)
         return ret;
     }
 
-    if (stream->read_1bytes() == 0) {
-        value = false;
-    } else {
-        value = true;
-    }
+    value = (stream->read_1bytes() != 0);
     
     srs_verbose("amf0 read bool value success. value=%d", value);
     
@@ -1764,44 +1604,131 @@ int srs_amf0_write_undefined(SrsStream* stream)
     return ret;
 }
 
-bool srs_amf0_is_object_eof(SrsStream* stream) 
+
+namespace _srs_internal
 {
-    // detect the object-eof specially
-    if (stream->require(3)) {
-        int32_t flag = stream->read_3bytes();
-        stream->skip(-3);
+    int srs_amf0_read_utf8(SrsStream* stream, string& value)
+    {
+        int ret = ERROR_SUCCESS;
         
-        return 0x09 == flag;
+        // len
+        if (!stream->require(2)) {
+            ret = ERROR_RTMP_AMF0_DECODE;
+            srs_error("amf0 read string length failed. ret=%d", ret);
+            return ret;
+        }
+        int16_t len = stream->read_2bytes();
+        srs_verbose("amf0 read string length success. len=%d", len);
+        
+        // empty string
+        if (len <= 0) {
+            srs_verbose("amf0 read empty string. ret=%d", ret);
+            return ret;
+        }
+        
+        // data
+        if (!stream->require(len)) {
+            ret = ERROR_RTMP_AMF0_DECODE;
+            srs_error("amf0 read string data failed. ret=%d", ret);
+            return ret;
+        }
+        std::string str = stream->read_string(len);
+        
+        // support utf8-1 only
+        // 1.3.1 Strings and UTF-8
+        // UTF8-1 = %x00-7F
+        // TODO: support other utf-8 strings
+        /*for (int i = 0; i < len; i++) {
+            char ch = *(str.data() + i);
+            if ((ch & 0x80) != 0) {
+                ret = ERROR_RTMP_AMF0_DECODE;
+                srs_error("ignored. only support utf8-1, 0x00-0x7F, actual is %#x. ret=%d", (int)ch, ret);
+                ret = ERROR_SUCCESS;
+            }
+        }*/
+        
+        value = str;
+        srs_verbose("amf0 read string data success. str=%s", str.c_str());
+        
+        return ret;
+    }
+    int srs_amf0_write_utf8(SrsStream* stream, string value)
+    {
+        int ret = ERROR_SUCCESS;
+        
+        // len
+        if (!stream->require(2)) {
+            ret = ERROR_RTMP_AMF0_ENCODE;
+            srs_error("amf0 write string length failed. ret=%d", ret);
+            return ret;
+        }
+        stream->write_2bytes(value.length());
+        srs_verbose("amf0 write string length success. len=%d", (int)value.length());
+        
+        // empty string
+        if (value.length() <= 0) {
+            srs_verbose("amf0 write empty string. ret=%d", ret);
+            return ret;
+        }
+        
+        // data
+        if (!stream->require(value.length())) {
+            ret = ERROR_RTMP_AMF0_ENCODE;
+            srs_error("amf0 write string data failed. ret=%d", ret);
+            return ret;
+        }
+        stream->write_string(value);
+        srs_verbose("amf0 write string data success. str=%s", value.c_str());
+        
+        return ret;
     }
     
-    return false;
+    bool srs_amf0_is_object_eof(SrsStream* stream) 
+    {
+        // detect the object-eof specially
+        if (stream->require(3)) {
+            int32_t flag = stream->read_3bytes();
+            stream->skip(-3);
+            
+            return 0x09 == flag;
+        }
+        
+        return false;
+    }
+    
+    int srs_amf0_write_object_eof(SrsStream* stream, SrsAmf0ObjectEOF* value)
+    {
+        int ret = ERROR_SUCCESS;
+        
+        srs_assert(value != NULL);
+        
+        // value
+        if (!stream->require(2)) {
+            ret = ERROR_RTMP_AMF0_ENCODE;
+            srs_error("amf0 write object eof value failed. ret=%d", ret);
+            return ret;
+        }
+        stream->write_2bytes(0x00);
+        srs_verbose("amf0 write object eof value success");
+        
+        // marker
+        if (!stream->require(1)) {
+            ret = ERROR_RTMP_AMF0_ENCODE;
+            srs_error("amf0 write object eof marker failed. ret=%d", ret);
+            return ret;
+        }
+        
+        stream->write_1bytes(RTMP_AMF0_ObjectEnd);
+        
+        srs_verbose("amf0 read object eof success");
+        
+        return ret;
+    }
+
+    int srs_amf0_write_any(SrsStream* stream, SrsAmf0Any* value)
+    {
+        srs_assert(value != NULL);
+        return value->write(stream);
+    }
 }
 
-int srs_amf0_write_object_eof(SrsStream* stream, __SrsAmf0ObjectEOF* value)
-{
-    int ret = ERROR_SUCCESS;
-    
-    srs_assert(value != NULL);
-    
-    // value
-    if (!stream->require(2)) {
-        ret = ERROR_RTMP_AMF0_ENCODE;
-        srs_error("amf0 write object eof value failed. ret=%d", ret);
-        return ret;
-    }
-    stream->write_2bytes(0x00);
-    srs_verbose("amf0 write object eof value success");
-    
-    // marker
-    if (!stream->require(1)) {
-        ret = ERROR_RTMP_AMF0_ENCODE;
-        srs_error("amf0 write object eof marker failed. ret=%d", ret);
-        return ret;
-    }
-    
-    stream->write_1bytes(RTMP_AMF0_ObjectEnd);
-    
-    srs_verbose("amf0 read object eof success");
-    
-    return ret;
-}

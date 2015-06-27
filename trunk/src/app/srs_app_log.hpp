@@ -57,12 +57,16 @@ public:
 
 /**
 * we use memory/disk cache and donot flush when write log.
+* it's ok to use it without config, which will log to console, and default trace level.
+* when you want to use different level, override this classs, set the protected _level.
 */
 class SrsFastLog : public ISrsLog, public ISrsReloadHandler
 {
-private:
+// for utest to override
+protected:
     // defined in SrsLogLevel.
     int _level;
+private:
     char* log_data;
     // log to file if specified srs_log_file
     int fd;
@@ -90,3 +94,4 @@ private:
 };
 
 #endif
+

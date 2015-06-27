@@ -13,6 +13,8 @@
 #####################################################################################
 help=no
 
+################################################################
+# feature options
 SRS_HLS=RESERVED
 SRS_DVR=RESERVED
 SRS_NGINX=RESERVED
@@ -20,12 +22,11 @@ SRS_SSL=RESERVED
 SRS_FFMPEG_TOOL=RESERVED
 SRS_TRANSCODE=RESERVED
 SRS_INGEST=RESERVED
+SRS_STAT=RESERVED
 SRS_HTTP_CALLBACK=RESERVED
 SRS_HTTP_SERVER=RESERVED
 SRS_HTTP_API=RESERVED
 SRS_LIBRTMP=RESERVED
-# srs-bandwidth-test client
-SRS_BWTC=RESERVED
 SRS_RESEARCH=RESERVED
 SRS_UTEST=RESERVED
 # tcmalloc
@@ -39,6 +40,7 @@ SRS_GPERF_CP=RESERVED
 # gprof
 SRS_GPROF=RESERVED
 # 
+################################################################
 # libraries
 SRS_FFMPEG_STUB=RESERVED
 SRS_HTTP_PARSER=RESERVED
@@ -46,22 +48,37 @@ SRS_HTTP_PARSER=RESERVED
 SRS_PREFIX=/usr/local/srs
 SRS_JOBS=1
 SRS_STATIC=RESERVED
+# whether enable the log verbose/info/trace level.
+# always enable the warn/error level.
+SRS_LOG_VERBOSE=RESERVED
+SRS_LOG_INFO=RESERVED
+SRS_LOG_TRACE=RESERVED
 #
+################################################################
 # experts
 # donot compile ssl, use system ssl(-lssl) if required.
 SRS_USE_SYS_SSL=NO
 #
+################################################################
 # presets
 # for x86/x64 pc/servers
 SRS_X86_X64=NO
+# for ios(darwin)
+SRS_OSX=NO
 # armhf(v7cpu) built on ubuntu12
 SRS_ARM_UBUNTU12=NO
 # mips built on ubuntu12
 SRS_MIPS_UBUNTU12=NO
 # dev, open all features for dev, no gperf/prof/arm.
 SRS_DEV=NO
+# dev, open main server feature for dev, no utest/research/librtmp
+SRS_FAST_DEV=NO
+# demo, for the demo of srs, @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_SampleDemo
+SRS_DEMO=NO
 # raspberry-pi, open hls/ssl/static
 SRS_PI=NO
+# cubieboard, donot open ffmpeg/nginx.
+SRS_CUBIE=NO
 # the most fast compile, nothing, only support vp6 RTMP.
 SRS_FAST=NO
 # only support RTMP with ssl.
@@ -73,6 +90,7 @@ SRS_DISABLE_ALL=NO
 # all features is on
 SRS_ENABLE_ALL=NO
 #
+################################################################
 # calc
 # whether embed cpu, arm/mips
 SRS_EMBEDED_CPU=NO
@@ -101,8 +119,8 @@ Options:
                             user must specifies the transcode tools in conf.
   --with-ingest             enable ingest features.
                             user must specifies the ingest tools in conf.
+  --with-stat               enable the data statistic, for http api.
   --with-librtmp            enable srs-librtmp, library for client.
-  --with-bwtc               enable SRS bandwidth test client tool.
   --with-research           build the research tools.
   --with-utest              build the utest for SRS.
   --with-gperf              build SRS with gperf tools(no gmc/gmp/gcp, with tcmalloc only).
@@ -122,8 +140,8 @@ Options:
   --without-ffmpeg          disable the ffmpeg transcode tool feature.
   --without-transcode       disable the transcoding feature.
   --without-ingest          disable the ingest feature.
+  --without-stat            disable the data statistic feature.
   --without-librtmp         disable srs-librtmp, library for client.
-  --without-bwtc            disable SRS bandwidth test client tool.
   --without-research        do not build the research tools.
   --without-utest           do not build the utest for SRS.
   --without-gperf           do not build SRS with gperf tools(without tcmalloc and gmc/gmp/gcp).
@@ -134,20 +152,26 @@ Options:
   --without-arm-ubuntu12    do not build srs on ubuntu12 for armhf(v7cpu).
                           
   --prefix=<path>           the absolute install path for srs.
-  --static                  whether add '-static' to link options. always set this option for arm.
+  --static                  whether add '-static' to link options.
   --jobs[=N]                Allow N jobs at once; infinite jobs with no arg.
                             used for make in the configure, for example, to make ffmpeg.
+  --log-verbose             whether enable the log verbose level. default: no.
+  --log-info                whether enable the log info level. default: no.
+  --log-trace               whether enable the log trace level. default: yes.
 
 Presets:
   --x86-x64                 [default] for x86/x64 cpu, common pc and servers.
   --pi                      for raspberry-pi(directly build), open features hls/ssl/static.
-  --arm                     alias for --with-arm-ubuntu12
-  --mips                    alias for --with-mips-ubuntu12
+  --cubie                   for cubieboard(directly build), open features except ffmpeg/nginx.
+  --arm                     alias for --with-arm-ubuntu12, for ubuntu12, arm crossbuild
+  --mips                    alias for --with-mips-ubuntu12, for ubuntu12, mips crossbuild
   --fast                    the most fast compile, nothing, only support vp6 RTMP.
   --pure-rtmp               only support RTMP with ssl.
   --rtmp-hls                only support RTMP+HLS with ssl.
   --disable-all             disable all features, only support vp6 RTMP.
   --dev                     for dev, open all features, no nginx/gperf/gprof/arm.
+  --fast-dev                for dev fast compile, the RTMP server, without librtmp/utest/research.
+  --demo                    for srs demo, @see: https://github.com/simple-rtmp-server/srs/wiki/v1_CN_SampleDemo
   --full                    enable all features, no gperf/gprof/arm.
   
 Conflicts:
@@ -155,7 +179,7 @@ Conflicts:
         @see: http://google-perftools.googlecode.com/svn/trunk/doc/heap_checker.html
   2. --with-gperf/gmc/gmp vs --with-gprof:
         gperftools not compatible with gprof.
-  3. --arm vs --with-ffmpeg/bwtc/gperf/gmc/gmp/gprof:
+  3. --arm vs --with-ffmpeg/gperf/gmc/gmp/gprof:
         the complex tools not available for arm.
 
 Experts:
@@ -179,14 +203,14 @@ function parse_user_option() {
         --with-hls)                     SRS_HLS=YES                 ;;
         --with-dvr)                     SRS_DVR=YES                 ;;
         --with-nginx)                   SRS_NGINX=YES               ;;
-        --with-ffmpeg)                  SRS_FFMPEG_TOOL=YES              ;;
+        --with-ffmpeg)                  SRS_FFMPEG_TOOL=YES         ;;
         --with-transcode)               SRS_TRANSCODE=YES           ;;
         --with-ingest)                  SRS_INGEST=YES              ;;
+        --with-stat)                    SRS_STAT=YES                ;;
         --with-http-callback)           SRS_HTTP_CALLBACK=YES       ;;
         --with-http-server)             SRS_HTTP_SERVER=YES         ;;
         --with-http-api)                SRS_HTTP_API=YES            ;;
         --with-librtmp)                 SRS_LIBRTMP=YES             ;;
-        --with-bwtc)                    SRS_BWTC=YES                ;;
         --with-research)                SRS_RESEARCH=YES            ;;
         --with-utest)                   SRS_UTEST=YES               ;;
         --with-gperf)                   SRS_GPERF=YES               ;;
@@ -201,14 +225,14 @@ function parse_user_option() {
         --without-hls)                  SRS_HLS=NO                  ;;
         --without-dvr)                  SRS_DVR=NO                  ;;
         --without-nginx)                SRS_NGINX=NO                ;;
-        --without-ffmpeg)               SRS_FFMPEG_TOOL=NO               ;;
+        --without-ffmpeg)               SRS_FFMPEG_TOOL=NO          ;;
         --without-transcode)            SRS_TRANSCODE=NO            ;;
         --without-ingest)               SRS_INGEST=NO               ;;
+        --without-stat)                 SRS_STAT=NO                 ;;
         --without-http-callback)        SRS_HTTP_CALLBACK=NO        ;;
         --without-http-server)          SRS_HTTP_SERVER=NO          ;;
         --without-http-api)             SRS_HTTP_API=NO             ;;
         --without-librtmp)              SRS_LIBRTMP=NO              ;;
-        --without-bwtc)                 SRS_BWTC=NO                 ;;
         --without-research)             SRS_RESEARCH=NO             ;;
         --without-utest)                SRS_UTEST=NO                ;;
         --without-gperf)                SRS_GPERF=NO                ;;
@@ -222,12 +246,18 @@ function parse_user_option() {
         --jobs)                         SRS_JOBS=${value}           ;;
         --prefix)                       SRS_PREFIX=${value}         ;;
         --static)                       SRS_STATIC=YES              ;;
+        --log-verbose)                  SRS_LOG_VERBOSE=YES         ;;
+        --log-info)                     SRS_LOG_INFO=YES            ;;
+        --log-trace)                    SRS_LOG_TRACE=YES           ;;
         
         --x86-x64)                      SRS_X86_X64=YES             ;;
         --arm)                          SRS_ARM_UBUNTU12=YES        ;;
         --mips)                         SRS_MIPS_UBUNTU12=YES       ;;
         --pi)                           SRS_PI=YES                  ;;
+        --cubie)                        SRS_CUBIE=YES               ;;
         --dev)                          SRS_DEV=YES                 ;;
+        --fast-dev)                     SRS_FAST_DEV=YES            ;;
+        --demo)                         SRS_DEMO=YES                ;;
         --fast)                         SRS_FAST=YES                ;;
         --disable-all)                  SRS_DISABLE_ALL=YES         ;;
         --pure-rtmp)                    SRS_PURE_RTMP=YES           ;;
@@ -271,6 +301,11 @@ if [ $help = yes ]; then
 fi
 
 function apply_user_presets() {
+    # always set the log level for all presets.
+    SRS_LOG_VERBOSE=NO
+    SRS_LOG_INFO=NO
+    SRS_LOG_TRACE=YES
+    
     # set default preset if not specifies
     if [ $SRS_RTMP_HLS = NO ]; then
         if [ $SRS_PURE_RTMP = NO ]; then
@@ -278,11 +313,19 @@ function apply_user_presets() {
                 if [ $SRS_DISABLE_ALL = NO ]; then
                     if [ $SRS_ENABLE_ALL = NO ]; then
                         if [ $SRS_DEV = NO ]; then
-                            if [ $SRS_ARM_UBUNTU12 = NO ]; then
-                                if [ $SRS_MIPS_UBUNTU12 = NO ]; then
-                                    if [ $SRS_PI = NO ]; then
-                                        if [ $SRS_X86_X64 = NO ]; then
-                                            SRS_X86_X64=YES; opt="--x86-x64 $opt";
+                            if [ $SRS_FAST_DEV = NO ]; then
+                                if [ $SRS_DEMO = NO ]; then
+                                    if [ $SRS_ARM_UBUNTU12 = NO ]; then
+                                        if [ $SRS_MIPS_UBUNTU12 = NO ]; then
+                                            if [ $SRS_PI = NO ]; then
+                                                if [ $SRS_CUBIE = NO ]; then
+                                                    if [ $SRS_X86_X64 = NO ]; then
+                                                        if [ $SRS_OSX = NO ]; then
+                                                            SRS_X86_X64=YES; opt="--x86-x64 $opt";
+                                                        fi
+                                                    fi
+                                                fi
+                                            fi
                                         fi
                                     fi
                                 fi
@@ -311,12 +354,12 @@ function apply_user_presets() {
         SRS_FFMPEG_TOOL=NO
         SRS_TRANSCODE=NO
         SRS_INGEST=NO
+        SRS_STAT=NO
         SRS_HTTP_PARSER=NO
         SRS_HTTP_CALLBACK=NO
         SRS_HTTP_SERVER=NO
         SRS_HTTP_API=NO
         SRS_LIBRTMP=NO
-        SRS_BWTC=NO
         SRS_RESEARCH=NO
         SRS_UTEST=NO
         SRS_GPERF=NO
@@ -336,12 +379,12 @@ function apply_user_presets() {
         SRS_FFMPEG_TOOL=YES
         SRS_TRANSCODE=YES
         SRS_INGEST=YES
+        SRS_STAT=YES
         SRS_HTTP_PARSER=YES
         SRS_HTTP_CALLBACK=YES
         SRS_HTTP_SERVER=YES
         SRS_HTTP_API=YES
         SRS_LIBRTMP=YES
-        SRS_BWTC=YES
         SRS_RESEARCH=YES
         SRS_UTEST=YES
         SRS_GPERF=NO
@@ -361,12 +404,12 @@ function apply_user_presets() {
         SRS_FFMPEG_TOOL=NO
         SRS_TRANSCODE=NO
         SRS_INGEST=NO
+        SRS_STAT=NO
         SRS_HTTP_PARSER=NO
         SRS_HTTP_CALLBACK=NO
         SRS_HTTP_SERVER=NO
         SRS_HTTP_API=NO
         SRS_LIBRTMP=NO
-        SRS_BWTC=NO
         SRS_RESEARCH=NO
         SRS_UTEST=NO
         SRS_GPERF=NO
@@ -386,12 +429,12 @@ function apply_user_presets() {
         SRS_FFMPEG_TOOL=NO
         SRS_TRANSCODE=NO
         SRS_INGEST=NO
+        SRS_STAT=NO
         SRS_HTTP_PARSER=NO
         SRS_HTTP_CALLBACK=NO
         SRS_HTTP_SERVER=NO
         SRS_HTTP_API=NO
         SRS_LIBRTMP=NO
-        SRS_BWTC=NO
         SRS_RESEARCH=NO
         SRS_UTEST=NO
         SRS_GPERF=NO
@@ -411,12 +454,12 @@ function apply_user_presets() {
         SRS_FFMPEG_TOOL=NO
         SRS_TRANSCODE=NO
         SRS_INGEST=NO
+        SRS_STAT=NO
         SRS_HTTP_PARSER=NO
         SRS_HTTP_CALLBACK=NO
         SRS_HTTP_SERVER=NO
         SRS_HTTP_API=NO
         SRS_LIBRTMP=NO
-        SRS_BWTC=NO
         SRS_RESEARCH=NO
         SRS_UTEST=NO
         SRS_GPERF=NO
@@ -436,12 +479,12 @@ function apply_user_presets() {
         SRS_FFMPEG_TOOL=NO
         SRS_TRANSCODE=YES
         SRS_INGEST=YES
+        SRS_STAT=YES
         SRS_HTTP_PARSER=YES
         SRS_HTTP_CALLBACK=YES
         SRS_HTTP_SERVER=YES
         SRS_HTTP_API=YES
         SRS_LIBRTMP=YES
-        SRS_BWTC=NO
         SRS_RESEARCH=NO
         SRS_UTEST=NO
         SRS_GPERF=NO
@@ -462,12 +505,12 @@ function apply_user_presets() {
         SRS_FFMPEG_TOOL=NO
         SRS_TRANSCODE=YES
         SRS_INGEST=YES
+        SRS_STAT=YES
         SRS_HTTP_PARSER=YES
         SRS_HTTP_CALLBACK=YES
         SRS_HTTP_SERVER=YES
         SRS_HTTP_API=YES
         SRS_LIBRTMP=YES
-        SRS_BWTC=NO
         SRS_RESEARCH=NO
         SRS_UTEST=NO
         SRS_GPERF=NO
@@ -487,12 +530,12 @@ function apply_user_presets() {
         SRS_FFMPEG_TOOL=NO
         SRS_TRANSCODE=YES
         SRS_INGEST=YES
+        SRS_STAT=YES
         SRS_HTTP_PARSER=YES
         SRS_HTTP_CALLBACK=YES
         SRS_HTTP_SERVER=YES
         SRS_HTTP_API=YES
         SRS_LIBRTMP=YES
-        SRS_BWTC=YES
         SRS_RESEARCH=NO
         SRS_UTEST=YES
         SRS_GPERF=NO
@@ -512,13 +555,90 @@ function apply_user_presets() {
         SRS_FFMPEG_TOOL=YES
         SRS_TRANSCODE=YES
         SRS_INGEST=YES
+        SRS_STAT=YES
         SRS_HTTP_PARSER=YES
         SRS_HTTP_CALLBACK=YES
         SRS_HTTP_SERVER=YES
         SRS_HTTP_API=YES
         SRS_LIBRTMP=YES
-        SRS_BWTC=YES
         SRS_RESEARCH=YES
+        SRS_UTEST=YES
+        SRS_GPERF=NO
+        SRS_GPERF_MC=NO
+        SRS_GPERF_MP=NO
+        SRS_GPERF_CP=NO
+        SRS_GPROF=NO
+        SRS_STATIC=NO
+    fi
+
+    # if fast dev specified, open main server features.
+    if [ $SRS_FAST_DEV = YES ]; then
+        SRS_HLS=YES
+        SRS_DVR=YES
+        SRS_NGINX=NO
+        SRS_SSL=YES
+        SRS_FFMPEG_TOOL=NO
+        SRS_TRANSCODE=YES
+        SRS_INGEST=YES
+        SRS_STAT=YES
+        SRS_HTTP_PARSER=YES
+        SRS_HTTP_CALLBACK=YES
+        SRS_HTTP_SERVER=YES
+        SRS_HTTP_API=YES
+        SRS_LIBRTMP=NO
+        SRS_RESEARCH=NO
+        SRS_UTEST=NO
+        SRS_GPERF=NO
+        SRS_GPERF_MC=NO
+        SRS_GPERF_MP=NO
+        SRS_GPERF_CP=NO
+        SRS_GPROF=NO
+        SRS_STATIC=NO
+    fi
+
+    # if osx dev specified, open main server features.
+    if [ $SRS_OSX = YES ]; then
+        SRS_HLS=YES
+        SRS_DVR=YES
+        SRS_NGINX=NO
+        SRS_SSL=YES
+        SRS_FFMPEG_TOOL=NO
+        SRS_TRANSCODE=YES
+        SRS_INGEST=YES
+        SRS_STAT=NO
+        SRS_HTTP_PARSER=YES
+        SRS_HTTP_CALLBACK=YES
+        SRS_HTTP_SERVER=YES
+        SRS_HTTP_API=YES
+        SRS_LIBRTMP=NO
+        SRS_RESEARCH=NO
+        SRS_UTEST=NO
+        SRS_GPERF=NO
+        SRS_GPERF_MC=NO
+        SRS_GPERF_MP=NO
+        SRS_GPERF_CP=NO
+        SRS_GPROF=NO
+        SRS_STATIC=NO
+    fi
+
+
+
+    # for srs demo
+    if [ $SRS_DEMO = YES ]; then
+        SRS_HLS=YES
+        SRS_DVR=YES
+        SRS_NGINX=NO
+        SRS_SSL=YES
+        SRS_FFMPEG_TOOL=YES
+        SRS_TRANSCODE=YES
+        SRS_INGEST=YES
+        SRS_STAT=YES
+        SRS_HTTP_PARSER=YES
+        SRS_HTTP_CALLBACK=YES
+        SRS_HTTP_SERVER=YES
+        SRS_HTTP_API=YES
+        SRS_LIBRTMP=YES
+        SRS_RESEARCH=NO
         SRS_UTEST=YES
         SRS_GPERF=NO
         SRS_GPERF_MC=NO
@@ -537,12 +657,37 @@ function apply_user_presets() {
         SRS_FFMPEG_TOOL=NO
         SRS_TRANSCODE=YES
         SRS_INGEST=YES
+        SRS_STAT=YES
         SRS_HTTP_PARSER=YES
         SRS_HTTP_CALLBACK=YES
         SRS_HTTP_SERVER=YES
         SRS_HTTP_API=YES
         SRS_LIBRTMP=YES
-        SRS_BWTC=NO
+        SRS_RESEARCH=NO
+        SRS_UTEST=NO
+        SRS_GPERF=NO
+        SRS_GPERF_MC=NO
+        SRS_GPERF_MP=NO
+        SRS_GPERF_CP=NO
+        SRS_GPROF=NO
+        SRS_STATIC=NO
+    fi
+
+    # if cubieboard specified, open features except ffmpeg/nginx.
+    if [ $SRS_CUBIE = YES ]; then
+        SRS_HLS=YES
+        SRS_DVR=YES
+        SRS_NGINX=NO
+        SRS_SSL=YES
+        SRS_FFMPEG_TOOL=YES
+        SRS_TRANSCODE=YES
+        SRS_INGEST=YES
+        SRS_STAT=YES
+        SRS_HTTP_PARSER=YES
+        SRS_HTTP_CALLBACK=YES
+        SRS_HTTP_SERVER=YES
+        SRS_HTTP_API=YES
+        SRS_LIBRTMP=YES
         SRS_RESEARCH=NO
         SRS_UTEST=NO
         SRS_GPERF=NO
@@ -597,11 +742,11 @@ function regenerate_options() {
     if [ $SRS_FFMPEG_TOOL = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --with-ffmpeg"; else SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --without-ffmpeg"; fi
     if [ $SRS_TRANSCODE = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --with-transcode"; else SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --without-transcode"; fi
     if [ $SRS_INGEST = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --with-ingest"; else SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --without-ingest"; fi
+    if [ $SRS_STAT = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --with-stat"; else SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --without-stat"; fi
     if [ $SRS_HTTP_CALLBACK = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --with-http-callback"; else SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --without-http-callback"; fi
     if [ $SRS_HTTP_SERVER = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --with-http-server"; else SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --without-http-server"; fi
     if [ $SRS_HTTP_API = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --with-http-api"; else SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --without-http-api"; fi
     if [ $SRS_LIBRTMP = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --with-librtmp"; else SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --without-librtmp"; fi
-    if [ $SRS_BWTC = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --with-bwtc"; else SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --without-bwtc"; fi
     if [ $SRS_RESEARCH = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --with-research"; else SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --without-research"; fi
     if [ $SRS_UTEST = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --with-utest"; else SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --without-utest"; fi
     if [ $SRS_GPERF = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --with-gperf"; else SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --without-gperf"; fi
@@ -612,6 +757,9 @@ function regenerate_options() {
     if [ $SRS_ARM_UBUNTU12 = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --with-arm-ubuntu12"; else SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --without-arm-ubuntu12"; fi
     if [ $SRS_MIPS_UBUNTU12 = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --with-mips-ubuntu12"; else SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --without-mips-ubuntu12"; fi
     if [ $SRS_STATIC = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --static"; fi
+    if [ $SRS_LOG_VERBOSE = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --log-verbose"; fi
+    if [ $SRS_LOG_INFO = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --log-info"; fi
+    if [ $SRS_LOG_TRACE = YES ]; then SRS_AUTO_CONFIGURE="${SRS_AUTO_CONFIGURE} --log-trace"; fi
     echo "regenerate config: ${SRS_AUTO_CONFIGURE}"
 }
 regenerate_options
@@ -648,7 +796,6 @@ function check_option_conflicts() {
     # user should disable all other features
     if [ $SRS_EMBEDED_CPU = YES ]; then
         if [ $SRS_FFMPEG_TOOL = YES ]; then echo "ffmpeg for arm is not available, see: ./configure --help"; __check_ok=NO; fi
-        if [ $SRS_BWTC = YES ]; then echo "bwtc for arm is not available, see: ./configure --help"; __check_ok=NO; fi
         if [ $SRS_RESEARCH = YES ]; then echo "research for arm is not available, see: ./configure --help"; __check_ok=NO; fi
         if [ $SRS_GPERF = YES ]; then echo "gperf for arm is not available, see: ./configure --help"; __check_ok=NO; fi
         if [ $SRS_GPERF_MC = YES ]; then echo "gmc for arm is not available, see: ./configure --help"; __check_ok=NO; fi
@@ -664,6 +811,26 @@ function check_option_conflicts() {
         fi
     fi
 
+    # for darwin, not support stat yet.
+    if [ $SRS_OSX = YES ]; then
+        if [ $SRS_STAT = YES ]; then
+            echo "osx should never use stat, see: ./configure --help"; __check_ok=NO;
+        fi
+    fi
+    
+    # for darwin, must use --osx, vice versa
+    if [ $SRS_OSX = YES ]; then 
+        if [ `uname -s` != Darwin ]; then
+            echo "--osx is for darwin(your os is not), see: ./configure --help"; __check_ok=NO;
+        fi
+    else
+        if [ `uname -s` = Darwin ]; then
+            echo "use --osx for darwin, see: ./configure --help"; __check_ok=NO;
+        fi
+    fi
+    
+    # TODO: FIXME: check more os.
+
     # check variable neccessary
     if [ $SRS_HLS = RESERVED ]; then echo "you must specifies the hls, see: ./configure --help"; __check_ok=NO; fi
     if [ $SRS_DVR = RESERVED ]; then echo "you must specifies the dvr, see: ./configure --help"; __check_ok=NO; fi
@@ -674,7 +841,6 @@ function check_option_conflicts() {
     if [ $SRS_HTTP_SERVER = RESERVED ]; then echo "you must specifies the http-server, see: ./configure --help"; __check_ok=NO; fi
     if [ $SRS_HTTP_API = RESERVED ]; then echo "you must specifies the http-api, see: ./configure --help"; __check_ok=NO; fi
     if [ $SRS_LIBRTMP = RESERVED ]; then echo "you must specifies the librtmp, see: ./configure --help"; __check_ok=NO; fi
-    if [ $SRS_BWTC = RESERVED ]; then echo "you must specifies the bwtc, see: ./configure --help"; __check_ok=NO; fi
     if [ $SRS_RESEARCH = RESERVED ]; then echo "you must specifies the research, see: ./configure --help"; __check_ok=NO; fi
     if [ $SRS_UTEST = RESERVED ]; then echo "you must specifies the utest, see: ./configure --help"; __check_ok=NO; fi
     if [ $SRS_GPERF = RESERVED ]; then echo "you must specifies the gperf, see: ./configure --help"; __check_ok=NO; fi

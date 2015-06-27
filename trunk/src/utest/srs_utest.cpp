@@ -30,11 +30,29 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <srs_app_log.hpp>
 
 // kernel module.
-ISrsLog* _srs_log = new ISrsLog();
+ISrsLog* _srs_log = new MockEmptyLog(SrsLogLevel::Disabled);
 ISrsThreadContext* _srs_context = new ISrsThreadContext();
 // app module.
 SrsConfig* _srs_config = NULL;
 SrsServer* _srs_server = NULL;
+
+MockEmptyLog::MockEmptyLog(int level)
+{
+    _level = level;
+}
+
+MockEmptyLog::~MockEmptyLog()
+{
+}
+
+void __srs_bytes_print(char* pa, int size)
+{
+    for(int i = 0; i < size; i++) {
+        char v = pa[i];
+        printf("%#x ", v);
+    }
+    printf("\n");
+}
 
 // basic test and samples.
 VOID TEST(SampleTest, FastSampleInt64Test) 
@@ -66,3 +84,4 @@ VOID TEST(SampleTest, FastSampleMacrosTest)
     EXPECT_DOUBLE_EQ(1.0, 1.0000000000000001);
     EXPECT_NEAR(10, 15, 5);
 }
+
